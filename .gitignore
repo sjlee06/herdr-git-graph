@@ -1,0 +1,6 @@
+/target/
+/dist/
+/bin/herdr-git-graph
+*.log
+.DS_Store
+__pycache__/

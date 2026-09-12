@@ -1,0 +1,103 @@
+# Herdr Git Graph
+
+**Explore Git branches, merges, and commit diffs without leaving Herdr.**
+
+[![CI](https://github.com/sjlee06/herdr-git-graph/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sjlee06/herdr-git-graph/actions/workflows/ci.yml)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Herdr Plugin](https://img.shields.io/badge/Herdr-plugin-5eead4)](https://herdr.dev/docs/plugins/)
+
+English · [한국어](README.ko.md)
+
+A read-only Git graph viewer built with Rust and Ratatui. Browse local and remote-tracking branches, follow merge history, search commits, and inspect diffs. Compatible Herdr panes display smooth curves; other terminals use a colored Unicode graph.
+
+![Herdr Git Graph: branches, curved commit graph, and commit inspector](docs/preview.png)
+
+*Demo snapshot generated from the application's Ratatui layout and curve renderer. [Text-mode preview](docs/preview-text.svg).*
+
+## Features
+
+- **Branch and merge graph** — colored lanes, branch and tag labels, and support for detached HEAD and linked worktrees.
+- **Commit inspector** — commit metadata, changed-file statistics, and colored diffs in one view.
+- **Search and navigation** — find a message, author, ref, or hash; navigate with the keyboard or mouse.
+- **Smooth curves with a text fallback** — antialiased Bézier connections through Herdr's graphics API, plus a Unicode renderer for ordinary terminals.
+
+## Install
+
+Requires **Herdr 0.9.0+**, **Git 2.31+**, and **Rust stable with Cargo** on macOS or Linux. Installation builds the plugin from source, so Cargo must be available on `PATH`. See [rustup](https://rustup.rs/) if you need to install Rust.
+
+```bash
+herdr plugin install sjlee06/herdr-git-graph
+```
+
+From a Herdr workspace containing a Git repository, open the graph in a new tab:
+
+```bash
+herdr plugin action invoke herdr.git-graph.open
+```
+
+To open a specific repository:
+
+```bash
+herdr plugin pane open \
+  --plugin herdr.git-graph \
+  --entrypoint graph \
+  --cwd /path/to/repository \
+  --focus
+```
+
+### Add a keybinding
+
+Add an available key to `~/.config/herdr/config.toml`:
+
+```toml
+[[keys.command]]
+key = "prefix+g"
+type = "plugin_action"
+command = "herdr.git-graph.open"
+description = "Open Git Graph"
+```
+
+Run `herdr server reload-config`, then press your prefix followed by `g`.
+
+## Use
+
+Select a branch and press **Enter** to show its history. Choose **All branches**, or press **a**, to return to the complete view. Select a commit to inspect its details below.
+
+| Key | Action |
+| --- | --- |
+| `Tab` / `Shift-Tab` | Switch panels |
+| `↑` `↓` / `j` `k` | Navigate items or scroll the diff |
+| `Enter` | Apply a branch filter / focus the inspector |
+| `/`, then `n` / `N` | Search, then jump between matches |
+| `a` | Show all branches |
+| `r` | Reload local Git history |
+| `d` | Toggle the inspector |
+| `?` | Show all shortcuts |
+| `q` / `Ctrl-C` | Quit |
+
+Mouse clicks select items; the wheel scrolls the panel under the pointer. See the [usage guide](docs/USAGE.md) for all shortcuts, rendering options, and troubleshooting.
+
+The viewer reads local Git data. To see new remote commits, fetch in your normal Git workflow and press `r`. It does not run fetch, checkout, commit, merge, rebase, or push. Search covers the loaded history: **2,000 commits by default**, configurable with `--limit`.
+
+## Run without Herdr
+
+```bash
+git clone https://github.com/sjlee06/herdr-git-graph.git
+cd herdr-git-graph
+sh scripts/build.sh
+
+./bin/herdr-git-graph --demo
+./bin/herdr-git-graph --repo /path/to/repository
+```
+
+Standalone mode uses the Unicode graph. Pixel curves require a compatible Herdr pane and outer terminal. See [renderer selection](docs/USAGE.md#renderers) for details.
+
+## Development
+
+The [development guide](docs/DEVELOPMENT.md) covers local plugin linking, builds, tests, and the source layout. [Validation notes](docs/VALIDATION.md) distinguish automated checks from live terminal graphics testing.
+
+Bug reports and contributions are welcome. Please include your OS, Herdr version, terminal, and the steps to reproduce the issue.
+
+## License
+
+[MIT](LICENSE). An independent community plugin for [Herdr](https://herdr.dev/).

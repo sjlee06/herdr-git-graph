@@ -1,0 +1,22 @@
+name: Rust
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - run: sh scripts/build.sh
+      - run: ./bin/herdr-git-graph --demo --check
+      - run: python3 tests/smoke.py ./bin/herdr-git-graph --work /tmp/hgg-smoke
