@@ -19,6 +19,7 @@ Rust + Ratatui로 만든 조회 전용 Git 그래프 플러그인입니다. 로�
 - **브랜치·병합 그래프:** 분기별 색상, 브랜치·태그 표시, detached HEAD와 linked worktree 지원.
 - **커밋 상세 보기:** 메타데이터, 변경 파일 통계, 컬러 diff를 한 화면에서 확인.
 - **검색과 탐색:** 메시지·작성자·ref·해시 검색, 키보드·마우스 조작.
+- **그래프 사이드바:** 작업 화면 오른쪽에 그래프와 커밋 목록만 표시. 좁은 패널에서도 검색·탐색 지원.
 - **부드러운 곡선:** Herdr 그래픽 API를 통한 베지어 곡선 출력과 일반 터미널용 문자 그래프.
 
 ## 설치
@@ -37,6 +38,14 @@ Git 저장소가 열려 있는 Herdr 작업 공간에서 실행하면 새 탭으
 herdr plugin action invoke herdr.git-graph.open
 ```
 
+작업 화면 옆에 그래프만 두고 보려면 사이드바를 엽니다. 현재 패널 오른쪽에 분할로 열리며 작업 중인 패널의 포커스를 유지합니다.
+
+```bash
+herdr plugin action invoke herdr.git-graph.sidebar
+```
+
+사이드바는 그래프·커밋 메시지·해시·ref만 표시하며 브랜치 목록과 diff 패널은 숨깁니다. 최소 24열 × 8행을 지원합니다. 분할선 드래그나 Herdr 크기 조절 모드(`prefix+r`)로 폭을 조절하고, `prefix+l`로 오른쪽 그래프에 이동해 조작할 수 있습니다. 그래프에서 `q`를 누르면 닫힙니다.
+
 특정 저장소를 직접 지정할 수도 있습니다.
 
 ```bash
@@ -49,17 +58,23 @@ herdr plugin pane open \
 
 ### 단축키 연결
 
-`~/.config/herdr/config.toml`에 사용하지 않는 키를 등록합니다.
+`~/.config/herdr/config.toml`에 사용하지 않는 키를 등록합니다. **`prefix+g`는 Herdr 기본 `goto`, `prefix+shift+g`는 워크트리 생성과 충돌합니다.** 아래 예시는 기본 설정에서 비어 있는 `u` 조합을 사용합니다. 이미 사용자 단축키로 쓰고 있다면 다른 키를 선택하세요.
 
 ```toml
 [[keys.command]]
-key = "prefix+g"
+key = "prefix+u"
 type = "plugin_action"
 command = "herdr.git-graph.open"
 description = "Open Git Graph"
+
+[[keys.command]]
+key = "prefix+shift+u"
+type = "plugin_action"
+command = "herdr.git-graph.sidebar"
+description = "Open Git Graph Sidebar"
 ```
 
-`herdr server reload-config`를 실행한 뒤, 설정한 prefix를 누르고 `g`를 누릅니다.
+`herdr config check`로 충돌을 확인하고 `herdr server reload-config`를 실행하세요. 설정한 prefix 다음 `u`는 전체 그래프, `Shift+u`는 사이드바를 엽니다. 기존 그래프용 `prefix+g` 항목은 위 설정으로 교체하세요.
 
 ## 사용법
 
@@ -90,6 +105,7 @@ sh scripts/install.sh
 
 ./bin/herdr-git-graph --demo
 ./bin/herdr-git-graph --repo /path/to/repository
+./bin/herdr-git-graph --repo /path/to/repository --sidebar
 ```
 
 일반 터미널에서는 문자 그래프를 사용합니다. 픽셀 곡선은 호환되는 Herdr 패널과 바깥 터미널이 필요합니다. [렌더러 안내](docs/USAGE.md#renderers)에서 설정과 문자 모드 전환 조건을 확인할 수 있습니다.

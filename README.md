@@ -53,13 +53,29 @@ Add an available key to `~/.config/herdr/config.toml`:
 
 ```toml
 [[keys.command]]
-key = "prefix+g"
+key = "prefix+u"
 type = "plugin_action"
 command = "herdr.git-graph.open"
 description = "Open Git Graph"
+
+[[keys.command]]
+key = "prefix+shift+u"
+type = "plugin_action"
+command = "herdr.git-graph.sidebar"
+description = "Open Git Graph Sidebar"
 ```
 
-Run `herdr server reload-config`, then press your prefix followed by `g`.
+`prefix+g` conflicts with Herdr's default `goto` action, and `prefix+shift+g` creates a worktree. Replace an existing graph binding on `prefix+g` with the example above. The `u` bindings are unused by Herdr defaults; choose others if your custom config already uses them. Run `herdr config check`, then `herdr server reload-config`. Press your prefix followed by `u` for the full view or `Shift+u` for the sidebar.
+
+### Graph sidebar
+
+```bash
+herdr plugin action invoke herdr.git-graph.sidebar
+```
+
+Opens a graph-only pane to the right of the current pane while keeping focus on your work. The sidebar shows the graph, commit subjects, hashes, and ref labels, with no branch list or diff inspector. It fits panes as small as 24 columns × 8 rows and supports search, keyboard navigation, and mouse scrolling.
+
+Drag the split divider or use Herdr's resize mode (`prefix+r`) to adjust the width. Use `prefix+l` to focus the graph and `q` inside it to close. For an existing terminal split, run `./bin/herdr-git-graph --sidebar --repo /path/to/repository`.
 
 ## Use
 

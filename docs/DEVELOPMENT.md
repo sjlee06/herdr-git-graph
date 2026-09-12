@@ -19,6 +19,7 @@ After changing Rust code, rebuild and reopen the viewer. If you change the manif
 
 ```bash
 ./bin/herdr-git-graph --demo
+./bin/herdr-git-graph --demo --sidebar
 ./bin/herdr-git-graph --repo /path/to/repository --check
 ```
 
@@ -63,6 +64,7 @@ The README's `docs/preview.png` is a rasterized copy of `preview.svg` for consis
 | `src/graphics.rs` | tiny-skia curves and Herdr PNG streams |
 | `src/herdr.rs` | Repository context, plugin action, socket requests |
 | `tests/repository.rs` | Integration tests using temporary Git repositories |
+| `tests/herdr.rs` | Tab/sidebar launch arguments, repository context, CLI errors |
 | `tests/smoke.py` | PTY and mock Herdr graphics tests |
 
 Graph layout is separate from rendering. Keep parent relationships intact across branch filtering and commit limits, and retain terminal cleanup and text fallback when changing rendering code.

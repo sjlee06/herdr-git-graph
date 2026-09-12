@@ -18,11 +18,11 @@ import time
 
 
 class Terminal:
-    def __init__(self, binary, extra=(), env=None):
+    def __init__(self, binary, extra=(), env=None, size=(140, 44)):
         self.master, self.slave = pty.openpty()
         self.original = termios.tcgetattr(self.slave)
         self.output = bytearray()
-        self.resize(140, 44)
+        self.resize(*size)
         child_env = dict(os.environ, TERM="xterm-256color")
         for key in ["HERDR_SOCKET_PATH", "HERDR_PANE_ID"]:
             child_env.pop(key, None)
@@ -174,6 +174,20 @@ def main():
     terminal.finish(terminate=True)
     print("PASS: SIGTERM restores terminal and mouse state")
 
+    terminal = Terminal(binary, ["--sidebar", "--renderer", "text"], size=(40, 24))
+    terminal.ready()
+    for keys in ["jj", "\t", "\x1b[Z", "d", "\r", "/한글\r", "n", "\x1b", "?", "\x1b", "r"]:
+        terminal.send(keys)
+    # Click and scroll within the compact history (SGR mouse protocol).
+    terminal.send("\x1b[<0;12;6M\x1b[<0;12;6m\x1b[<65;12;6M")
+    for size in [(24, 8), (20, 8), (48, 30), (140, 44)]:
+        terminal.resize(*size)
+        terminal.pump()
+    terminal.finish()
+    assert b"COMMIT INSPECTOR" not in terminal.output
+    assert b"BRANCHES" not in terminal.output
+    print("PASS: narrow sidebar, search, graph-only focus, mouse, resize, cleanup")
+
     with tempfile.TemporaryDirectory(prefix="rpc-", dir=args.work) as temporary:
         # UNIX socket paths have a small platform-specific maximum length.
         mock = MockHerdr(Path(temporary) / "s")
@@ -192,6 +206,25 @@ def main():
         assert mock.closed >= 2, "Help/exit should close owned graphics layers"
         (args.work / "stream-frame.png").write_bytes(mock.frames[-1][1])
         print(f"PASS: Herdr graphics negotiation, {len(mock.frames)} PNG frames, resize, layer cleanup")
+
+    with tempfile.TemporaryDirectory(prefix="rpc-", dir=args.work) as temporary:
+        mock = MockHerdr(Path(temporary) / "s")
+        terminal = Terminal(binary, ["--sidebar", "--renderer", "curves"],
+                            {"HERDR_SOCKET_PATH": str(mock.path), "HERDR_PANE_ID": "w-test:p-test"}, size=(40, 24))
+        terminal.ready()
+        terminal.pump(0.2)
+        terminal.send("jl")
+        terminal.send("?")
+        terminal.send("\x1b")
+        terminal.resize(24, 8)
+        terminal.pump(0.3)
+        terminal.finish()
+        mock.close()
+        assert not mock.errors, mock.errors
+        assert len(mock.frames) >= 3, len(mock.frames)
+        assert mock.closed >= 2, "Sidebar help/exit should close graphics layers"
+        assert mock.frames[-1][0]["placement"]["grid_cols"] <= 8
+        print("PASS: sidebar curves, narrow viewport, panning, help/exit layer cleanup")
 
     with tempfile.TemporaryDirectory(prefix="rpc-", dir=args.work) as temporary:
         mock = MockHerdr(Path(temporary) / "s", fail=True)

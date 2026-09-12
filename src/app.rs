@@ -85,6 +85,7 @@ pub struct App {
     pub searching: bool,
     pub help: bool,
     pub show_details: bool,
+    pub sidebar: bool,
     pub detail: String,
     pub detail_scroll: usize,
     pub detail_horizontal: u16,
@@ -120,6 +121,7 @@ impl App {
             searching: false,
             help: false,
             show_details: true,
+            sidebar: false,
             detail: String::new(),
             detail_scroll: 0,
             detail_horizontal: 0,
@@ -140,6 +142,13 @@ impl App {
         };
         app.selection_changed();
         app
+    }
+
+    pub fn with_sidebar(mut self, sidebar: bool) -> Self {
+        self.sidebar = sidebar;
+        self.show_details = !sidebar;
+        self.focus = Focus::History;
+        self
     }
 
     pub fn selected_oid(&self) -> Option<&str> {
@@ -164,7 +173,7 @@ impl App {
     }
 
     pub fn request_detail(&mut self, worker: &Worker) {
-        if self.demo || self.loading || Instant::now() < self.detail_due {
+        if !self.show_details || self.demo || self.loading || Instant::now() < self.detail_due {
             return;
         }
         if let Some(oid) = self.selected_oid().map(str::to_owned)
@@ -328,6 +337,8 @@ impl App {
         match key.code {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('?') => self.help = true,
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Enter | KeyCode::Char('d')
+                if self.sidebar => {}
             KeyCode::Tab => {
                 self.focus = match self.focus {
                     Focus::Branches => Focus::History,
@@ -452,6 +463,34 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sidebar_keeps_navigation_in_history_and_skips_diff_reads() {
+        let mut app = App::new(git::demo(), 2000, false).with_sidebar(true);
+        for code in [
+            KeyCode::Tab,
+            KeyCode::BackTab,
+            KeyCode::Enter,
+            KeyCode::Char('d'),
+        ] {
+            app.key(KeyEvent::new(code, KeyModifiers::NONE), None);
+            assert_eq!(app.focus, Focus::History);
+            assert!(!app.show_details);
+        }
+        app.key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE), None);
+        assert_eq!(app.selected, 1);
+        let (sender, requests) = mpsc::channel();
+        let (_, receiver) = mpsc::channel();
+        let worker = Worker { sender, receiver };
+        app.detail_due = Instant::now();
+        app.request_detail(&worker);
+        assert!(requests.try_recv().is_err());
+        app.query = "한글".into();
+        app.find(false, true);
+        assert_eq!(app.selected, 8);
+        app.load(None, Some(&worker));
+        assert!(matches!(requests.try_recv(), Ok(Request::Load { .. })));
+    }
+
     #[test]
     fn unicode_search_keeps_graph_topology_and_wraps() {
         let mut app = App::new(git::demo(), 2000, true);

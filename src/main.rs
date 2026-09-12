@@ -49,6 +49,12 @@ struct Args {
     /// Open the registered plugin in a new Herdr tab
     #[arg(long, conflicts_with_all = ["demo", "snapshot", "graph_png", "check"])]
     open_pane: bool,
+    /// Open a graph-only sidebar to the right of the current Herdr pane
+    #[arg(long, conflicts_with_all = ["open_pane", "sidebar", "demo", "snapshot", "graph_png", "check"])]
+    open_sidebar: bool,
+    /// Show only the graph and commit list, suitable for narrow side panes
+    #[arg(long, conflicts_with = "open_pane")]
+    sidebar: bool,
     /// Write a reproducible SVG of the Ratatui screen, then exit
     #[arg(long)]
     snapshot: Option<PathBuf>,
@@ -84,12 +90,15 @@ fn main() -> Result<()> {
     if args.open_pane {
         return herdr::open_pane(&root);
     }
+    if args.open_sidebar {
+        return herdr::open_sidebar(&root);
+    }
     let repo = if args.demo {
         git::demo()
     } else {
         git::load(&root, None, args.limit as usize)?
     };
-    let mut app = App::new(repo, args.limit as usize, args.demo);
+    let mut app = App::new(repo, args.limit as usize, args.demo).with_sidebar(args.sidebar);
     if args.check {
         println!(
             "Repository: {}\nHEAD: {}\nBranches: {}\nCommits: {}\nGraph lanes: {}",
@@ -103,6 +112,7 @@ fn main() -> Result<()> {
     }
     if let Some(path) = &args.snapshot {
         if !args.demo
+            && app.show_details
             && let Some(oid) = app.selected_oid()
         {
             app.detail = git::details(&root, oid)?;

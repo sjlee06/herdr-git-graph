@@ -1,6 +1,6 @@
 id = "herdr.git-graph"
 name = "Herdr Git Graph"
-version = "0.1.1"
+version = "0.2.0"
 min_herdr_version = "0.9.0"
 description = "Interactive Git commit and branch graph with smooth curves, search, and diffs."
 platforms = ["macos", "linux"]
@@ -14,8 +14,20 @@ title = "Open Git Graph"
 contexts = ["workspace"]
 command = ["./bin/herdr-git-graph", "--open-pane"]
 
+[[actions]]
+id = "sidebar"
+title = "Open Git Graph Sidebar"
+contexts = ["workspace"]
+command = ["./bin/herdr-git-graph", "--open-sidebar"]
+
 [[panes]]
 id = "graph"
 title = "Git Graph"
 placement = "tab"
 command = ["./bin/herdr-git-graph"]
+
+[[panes]]
+id = "sidebar"
+title = "Git Graph Sidebar"
+placement = "split"
+command = ["./bin/herdr-git-graph", "--sidebar"]

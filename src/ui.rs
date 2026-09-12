@@ -58,15 +58,19 @@ pub fn draw(frame: &mut Frame, app: &mut App, smooth: bool) -> Option<Viewport> 
     app.history_area = Rect::default();
     app.branches_area = Rect::default();
     app.detail_area = Rect::default();
-    if area.width < 64 || area.height < 18 {
+    let (min_width, min_height) = if app.sidebar { (24, 8) } else { (64, 18) };
+    if area.width < min_width || area.height < min_height {
         frame.render_widget(
-            Paragraph::new(
-                "Herdr Git Graph\n\nEnlarge this pane to at least 64 × 18.\nPress q to close.",
-            )
+            Paragraph::new(format!(
+                "Herdr Git Graph\n\nEnlarge to {min_width} × {min_height}.\nPress q to close."
+            ))
             .style(Style::default().fg(ACCENT)),
             area,
         );
         return None;
+    }
+    if app.sidebar {
+        return sidebar(frame, app, area, smooth);
     }
     let rows = Layout::vertical([
         Constraint::Length(3),
@@ -151,6 +155,86 @@ pub fn draw(frame: &mut Frame, app: &mut App, smooth: bool) -> Option<Viewport> 
         );
         return None;
     }
+    view
+}
+
+fn sidebar(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option<Viewport> {
+    if app.help {
+        frame.render_widget(
+            Paragraph::new(
+                vec![
+                    "↑↓ j/k move · g/G ends",
+                    "PgUp/Dn page · h/l pan",
+                    "/ search · n/N next/prev",
+                    "r reload · a all refs",
+                    "Mouse select / scroll",
+                    "Esc / ? / q close help",
+                ]
+                .into_iter()
+                .map(Line::from)
+                .collect::<Vec<_>>(),
+            )
+            .style(Style::default().fg(FG).bg(PANEL))
+            .block(block("Help", true)),
+            area,
+        );
+        return None;
+    }
+    let rows = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(4),
+        Constraint::Length(2),
+    ])
+    .split(area);
+    let name = app
+        .repo
+        .root
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| app.repo.root.display().to_string());
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::styled(
+                format!(" {}", clean(&name)),
+                Style::default().fg(FG).add_modifier(Modifier::BOLD),
+            ),
+            Line::styled(
+                format!(" {}", clean(&app.repo.head)),
+                Style::default().fg(ACCENT),
+            ),
+        ])
+        .style(Style::default().bg(PANEL)),
+        rows[0],
+    );
+    let view = history(frame, app, rows[1], smooth);
+    let count = app.repo.commits.len();
+    let status = if app.searching {
+        format!("/ {}▏", clean(&app.query))
+    } else if !app.query.is_empty() {
+        format!("/ {} · {}", clean(&app.query), clean(&app.status))
+    } else {
+        format!(
+            "{}/{}{} · {}",
+            if count == 0 { 0 } else { app.selected + 1 },
+            count,
+            if count == app.limit { " (limit)" } else { "" },
+            clean(&app.status),
+        )
+    };
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::styled(status, Style::default().fg(MUTED)),
+            Line::styled(
+                if app.searching {
+                    "Enter apply · Esc clear"
+                } else {
+                    "↑↓ move / find ? help q"
+                },
+                Style::default().fg(ACCENT).bg(PANEL),
+            ),
+        ]),
+        rows[2],
+    );
     view
 }
 
@@ -248,7 +332,11 @@ fn branches(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option<Viewport> {
     let b = block(
-        if app.loading {
+        if app.sidebar && app.loading {
+            "GIT GRAPH · loading…"
+        } else if app.sidebar {
+            "GIT GRAPH"
+        } else if app.loading {
             "HISTORY · loading…"
         } else {
             "HISTORY"
@@ -260,7 +348,11 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
     if inner.height < 2 || inner.width < 10 {
         return None;
     }
-    let body = Rect::new(inner.x, inner.y + 1, inner.width, inner.height - 1);
+    let body = if app.sidebar {
+        inner
+    } else {
+        Rect::new(inner.x, inner.y + 1, inner.width, inner.height - 1)
+    };
     app.history_area = body;
     let count = usize::from(body.height).div_ceil(2).max(1);
     if app.selected < app.top {
@@ -269,30 +361,36 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
     if app.selected >= app.top + count {
         app.top = app.selected + 1 - count;
     }
-    let graph_width = ((app.graph.width * 3 + 2).max(10) as u16)
+    let graph_width = ((app.graph.width * 3 + 2).max(if app.sidebar { 5 } else { 10 }) as u16)
         .min(36)
         .min(inner.width / 3);
     let cols = Layout::horizontal([
         Constraint::Length(graph_width),
         Constraint::Min(10),
-        Constraint::Length(if inner.width >= 72 { 19 } else { 0 }),
+        Constraint::Length(if !app.sidebar && inner.width >= 72 {
+            19
+        } else {
+            0
+        }),
     ])
     .spacing(1)
     .split(body);
-    let col_header = Rect::new(inner.x, inner.y, inner.width, 1);
-    frame.render_widget(
-        Paragraph::new(" GRAPH").style(Style::default().fg(MUTED).bg(PANEL)),
-        col_header,
-    );
-    frame.render_widget(
-        Paragraph::new("COMMIT / DESCRIPTION").style(Style::default().fg(MUTED).bg(PANEL)),
-        Rect::new(cols[1].x, inner.y, cols[1].width, 1),
-    );
-    if cols[2].width > 0 {
+    if !app.sidebar {
+        let col_header = Rect::new(inner.x, inner.y, inner.width, 1);
         frame.render_widget(
-            Paragraph::new("AUTHOR · DATE").style(Style::default().fg(MUTED).bg(PANEL)),
-            Rect::new(cols[2].x, inner.y, cols[2].width, 1),
+            Paragraph::new(" GRAPH").style(Style::default().fg(MUTED).bg(PANEL)),
+            col_header,
         );
+        frame.render_widget(
+            Paragraph::new("COMMIT / DESCRIPTION").style(Style::default().fg(MUTED).bg(PANEL)),
+            Rect::new(cols[1].x, inner.y, cols[1].width, 1),
+        );
+        if cols[2].width > 0 {
+            frame.render_widget(
+                Paragraph::new("AUTHOR · DATE").style(Style::default().fg(MUTED).bg(PANEL)),
+                Rect::new(cols[2].x, inner.y, cols[2].width, 1),
+            );
+        }
     }
     if app.repo.commits.is_empty() {
         frame.render_widget(
@@ -325,36 +423,46 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
             && [&commit.subject, &commit.author, &commit.refs, &commit.oid]
                 .iter()
                 .any(|s| s.to_lowercase().contains(&app.query.to_lowercase()));
-        let line = Line::from(vec![
-            Span::styled(
+        let mut spans = Vec::new();
+        if !app.sidebar {
+            spans.push(Span::styled(
                 format!("{short}  "),
                 Style::default().fg(color(app.graph.rows[i].color)),
-            ),
-            Span::styled(
-                clean(&commit.subject),
-                Style::default()
-                    .fg(if is_match {
-                        Color::Rgb(251, 191, 106)
-                    } else {
-                        FG
-                    })
-                    .add_modifier(if selected {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::empty()
-                    }),
-            ),
-        ]);
+            ));
+        }
+        spans.push(Span::styled(
+            clean(&commit.subject),
+            Style::default()
+                .fg(if is_match {
+                    Color::Rgb(251, 191, 106)
+                } else {
+                    FG
+                })
+                .add_modifier(if selected {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        ));
+        let line = Line::from(spans);
         frame.render_widget(
             Paragraph::new(line),
             Rect::new(cols[1].x, y, cols[1].width, 1),
         );
         if y + 1 < body.bottom() {
+            let mut refs = Vec::new();
+            if app.sidebar {
+                refs.push(Span::styled(
+                    format!("{short} "),
+                    Style::default().fg(MUTED),
+                ));
+            }
+            refs.push(Span::styled(
+                clean(&commit.refs),
+                Style::default().fg(ACCENT),
+            ));
             frame.render_widget(
-                Paragraph::new(Span::styled(
-                    clean(&commit.refs),
-                    Style::default().fg(ACCENT),
-                )),
+                Paragraph::new(Line::from(refs)),
                 Rect::new(cols[1].x, y + 1, cols[1].width, 1),
             );
         }
@@ -580,6 +688,64 @@ fn xml(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sidebar_renders_narrow_history_without_hidden_panels() {
+        for (width, height) in [(24, 8), (32, 12), (48, 30), (140, 44)] {
+            for smooth in [false, true] {
+                let mut app = App::new(crate::git::demo(), 2000, true).with_sidebar(true);
+                app.selected = 8;
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                let mut view = None;
+                terminal
+                    .draw(|frame| {
+                        view = draw(frame, &mut app, smooth);
+                    })
+                    .unwrap();
+                let view = view.expect("Sidebar should fit in a narrow pane");
+                assert!(view.area.width > 0 && view.area.height > 0);
+                assert!(app.top <= app.selected);
+                assert!(app.selected < app.top + usize::from(app.history_area.height).div_ceil(2));
+                assert_eq!(app.branches_area, Rect::default());
+                assert_eq!(app.detail_area, Rect::default());
+                let screen: String = terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .map(|c| c.symbol())
+                    .collect();
+                assert!(screen.contains("GIT GRAPH"));
+                assert!(!screen.contains("BRANCHES"));
+                assert!(!screen.contains("COMMIT INSPECTOR"));
+                app.help = true;
+                terminal
+                    .draw(|frame| {
+                        assert!(draw(frame, &mut app, smooth).is_none());
+                    })
+                    .unwrap();
+                assert_eq!(app.history_area, Rect::default());
+            }
+        }
+    }
+
+    #[test]
+    fn sidebar_empty_history_and_small_resize_clear_mouse_targets() {
+        let mut repo = crate::git::demo();
+        repo.commits.clear();
+        let mut app = App::new(repo, 2000, true).with_sidebar(true);
+        for (width, height) in [(32, 12), (20, 8)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    assert!(draw(frame, &mut app, true).is_none());
+                })
+                .unwrap();
+        }
+        assert_eq!(app.history_area, Rect::default());
+        assert_eq!(app.branches_area, Rect::default());
+        assert_eq!(app.detail_area, Rect::default());
+    }
+
     #[test]
     fn responsive_views_and_wide_text_do_not_panic() {
         for (width, height) in [(20, 8), (64, 18), (95, 30), (132, 42), (200, 60)] {

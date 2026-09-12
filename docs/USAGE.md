@@ -10,7 +10,28 @@
 
 **Commit inspector** shows metadata, changed-file statistics, and a patch. Merge commits are compared with their first parent. Focus this panel to scroll the diff independently.
 
-The minimum pane size is 64 columns × 18 rows. Around 120 columns or more gives the history more room. In narrower panes, the branch list is hidden until you focus it with Tab.
+The full view's minimum pane size is 64 columns × 18 rows. Around 120 columns or more gives the history more room. In narrower panes, the branch list is hidden until you focus it with Tab.
+
+## Graph-only sidebar
+
+```bash
+# Open beside the current Herdr pane, keeping the current focus
+herdr plugin action invoke herdr.git-graph.sidebar
+
+# Open the registered sidebar explicitly
+herdr plugin pane open --plugin herdr.git-graph --entrypoint sidebar \
+  --placement split --direction right --cwd /path/to/repository --no-focus
+
+# Use graph-only layout in an existing terminal pane, or preview it
+./bin/herdr-git-graph --repo /path/to/repository --sidebar
+./bin/herdr-git-graph --demo --sidebar --width 40 --height 24 --snapshot sidebar.svg
+```
+
+The sidebar displays only the history graph and commit list, with repository and HEAD context above it. Commit subjects occupy the first line; hashes and ref labels occupy the second. The branch list, author/date columns, and diff inspector are hidden. Commit diffs are not loaded in this mode.
+
+The minimum size is 24 columns × 8 rows. Adjust the split width by dragging the divider or using Herdr's resize mode (`prefix+r` by default). Focus it with `prefix+l` from the pane on its left. Search, `n`/`N`, navigation, graph panning, mouse selection/scrolling, `r`, help, and quit work as usual. `Tab`, `Shift-Tab`, `Enter` outside search, and `d` keep the graph-only layout. Close the sidebar with `q` while it is focused. Each open action creates a new split.
+
+Suggested bindings are `prefix+u` for `herdr.git-graph.open` and `prefix+shift+u` for `herdr.git-graph.sidebar`; see the [README config example](../README.md#add-a-keybinding). Avoid `prefix+g` (`goto`) and `prefix+shift+g` (new worktree), which Herdr already binds by default. Validate with `herdr config check` before reloading the configuration.
 
 ## Keyboard and mouse
 
@@ -83,6 +104,6 @@ Git subprocesses have a 15-second timeout, and diff previews are capped at 512 K
 | No commits appear | An empty repository needs its first commit. Then press `r`. |
 | A commit cannot be found | Clear the branch filter with `a`, fetch if needed, or increase `--limit`. |
 | Curves are unavailable | Run inside Herdr, check the outer terminal and graphics setting, or use `--renderer text`. |
-| A pane is too small | Resize it; the minimum is 64 × 18. |
+| A pane is too small | Resize it; the full view needs 64 × 18, and `--sidebar` needs 24 × 8. |
 
 For local plugin development, rebuild before linking. GitHub installs run the manifest build command; `herdr plugin link` does not.

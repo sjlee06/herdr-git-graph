@@ -14,7 +14,7 @@
 
 - `cargo fmt --check`
 - `cargo clippy --all-targets --locked -- -D warnings`
-- `cargo test --locked`: 단위 테스트 9개 + 실제 Git 저장소 통합 테스트 4개
+- `cargo test --locked`: 단위 테스트 12개 + Herdr 실행 인자 통합 테스트 2개 + 실제 Git 저장소 통합 테스트 4개
 - `scripts/build.sh`: 최적화한 macOS arm64 실행 파일 생성
 - 병합 그래프의 각 outgoing edge가 실제 부모 OID와 일치하는지 검증
 - 여러 부모 병합, 연결되지 않은 이력, 페이지 밖 부모, 빈 저장소, 빈 커밋 제목
@@ -29,7 +29,15 @@
 - Herdr 0.9.0 CLI로 매니페스트를 읽고 `plugin_linked` 응답 확인
 - 같은 Ratatui 화면 버퍼에서 만든 SVG와 tiny-skia PNG를 시각적으로 검토
 
-매니페스트 검증은 별도 작업 폴더의 XDG 설정·상태 디렉터리와 비활성 플러그인 등록으로 수행했습니다.
+초기 매니페스트 검증은 별도 작업 폴더의 XDG 설정·상태 디렉터리와 비활성 플러그인 등록으로 수행했습니다.
+
+## 사이드바 및 단축키 수정 검증
+
+- 설치된 Herdr 0.9.0의 `--default-config`로 `prefix+g`의 `goto`, `prefix+shift+g`의 워크트리 생성 충돌 확인. README의 `prefix+u` / `prefix+shift+u` 예제를 임시 설정 파일에서 `herdr config check`로 검증.
+- `--open-sidebar`의 오른쪽 분할·포커스 유지, `--open-pane`의 기존 탭 열기, 공백이 있는 저장소 경로 및 작업 공간·원본 패널 전달, 실행 실패와 CLI 옵션 충돌 검증.
+- 사이드바 24×8, 32×12, 48×30, 140×44 화면에서 그래프 표시·선택 행 가시성·숨긴 패널의 마우스 영역 제거 확인. diff 요청 생략과 검색·새로고침 유지 확인.
+- PTY에서 좁은 사이드바의 한글 검색·키보드·마우스·크기 변경·종료 복구, 모의 Herdr 서버에서 곡선 전송·수평 이동·도움말·종료 시 레이어 정리 검증.
+- 40×24 곡선 사이드바, 24×8 문자 사이드바, 기존 전체 화면의 SVG를 PNG로 렌더링해 시각 검토. 로컬 릴리스 빌드를 플러그인으로 연결하고 새 `sidebar` 액션 등록 확인.
 
 ## v0.1.1 설치 수정 검증
 

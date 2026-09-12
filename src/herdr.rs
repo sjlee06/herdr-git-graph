@@ -48,6 +48,14 @@ pub fn context_paths(context: &Value) -> Vec<PathBuf> {
 }
 
 pub fn open_pane(root: &Path) -> Result<()> {
+    open_view(root, false)
+}
+
+pub fn open_sidebar(root: &Path) -> Result<()> {
+    open_view(root, true)
+}
+
+fn open_view(root: &Path, sidebar: bool) -> Result<()> {
     let bin = env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
     let mut command = Command::new(bin);
     command
@@ -58,15 +66,21 @@ pub fn open_pane(root: &Path) -> Result<()> {
             "--plugin",
             "herdr.git-graph",
             "--entrypoint",
-            "graph",
+            if sidebar { "sidebar" } else { "graph" },
             "--placement",
-            "tab",
-            "--focus",
+            if sidebar { "split" } else { "tab" },
+            if sidebar { "--no-focus" } else { "--focus" },
             "--cwd",
         ])
         .arg(root)
         .arg("--env")
         .arg(format!("HERDR_GIT_GRAPH_REPO={}", root.display()));
+    if sidebar {
+        command.args(["--direction", "right"]);
+        if let Ok(id) = env::var("HERDR_PANE_ID") {
+            command.arg("--target-pane").arg(id);
+        }
+    }
     if let Ok(id) = env::var("HERDR_WORKSPACE_ID") {
         command.arg("--workspace").arg(id);
     }
