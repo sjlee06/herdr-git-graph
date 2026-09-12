@@ -23,7 +23,9 @@ Rust + Ratatui로 만든 조회 전용 Git 그래프 플러그인입니다. 로�
 
 ## 설치
 
-macOS 또는 Linux에서 **Herdr 0.9.0 이상**, **Git 2.31 이상**, **Rust stable 및 Cargo**가 필요합니다. 설치 중 소스를 빌드하므로 Cargo가 `PATH`에 있어야 합니다. Rust 설치가 필요하면 [rustup](https://rustup.rs/)을 참고하세요.
+**Herdr 0.9.0 이상**, **Git 2.31 이상**, `curl`이 필요합니다. **Rust나 Cargo는 설치하지 않아도 됩니다.** 설치 스크립트가 환경에 맞는 [릴리스 실행 파일](https://github.com/sjlee06/herdr-git-graph/releases)을 내려받고 `shasum` 또는 `sha256sum`으로 SHA-256 체크섬을 검증합니다.
+
+배포 실행 파일은 **macOS 11 이상**, **glibc 2.35 이상인 Linux**(예: Ubuntu 22.04 이상)의 Apple Silicon/ARM64 및 x86_64를 지원합니다. 다른 환경에서는 [소스 빌드 안내](docs/DEVELOPMENT.md)를 참고하세요.
 
 ```bash
 herdr plugin install sjlee06/herdr-git-graph
@@ -84,7 +86,7 @@ description = "Open Git Graph"
 ```bash
 git clone https://github.com/sjlee06/herdr-git-graph.git
 cd herdr-git-graph
-sh scripts/build.sh
+sh scripts/install.sh
 
 ./bin/herdr-git-graph --demo
 ./bin/herdr-git-graph --repo /path/to/repository

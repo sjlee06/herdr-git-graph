@@ -1,0 +1,71 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+      RELEASE_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check release version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          version = os.environ['RELEASE_TAG'].removeprefix('v')
+          for path in ['Cargo.toml', 'herdr-plugin.toml']:
+              assert re.search(r'^version = "' + re.escape(version) + '"$', open(path).read(), re.M), path
+          PY
+      - run: python3 tests/install.py
+      - run: cargo test --locked
+      - run: cargo build --release --locked --target "$RELEASE_TARGET"
+      - run: ./target/"$RELEASE_TARGET"/release/herdr-git-graph --demo --check
+      - run: python3 tests/smoke.py ./target/"$RELEASE_TARGET"/release/herdr-git-graph --work /tmp/hgg-smoke
+      - name: Package binary and checksum
+        run: |
+          mkdir -p dist
+          cp "target/$RELEASE_TARGET/release/herdr-git-graph" "dist/herdr-git-graph-$RELEASE_TARGET"
+          cd dist
+          shasum -a 256 "herdr-git-graph-$RELEASE_TARGET" > "herdr-git-graph-$RELEASE_TARGET.sha256"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" dist/* --verify-tag --title "Herdr Git Graph $RELEASE_TAG" --notes "Install without Rust or Cargo. Prebuilt binaries for macOS 11+ and Linux with glibc 2.35+, on arm64 and x86_64. The plugin installer downloads the matching binary and verifies its SHA-256 checksum."

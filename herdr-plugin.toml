@@ -1,12 +1,12 @@
 id = "herdr.git-graph"
 name = "Herdr Git Graph"
-version = "0.1.0"
+version = "0.1.1"
 min_herdr_version = "0.9.0"
 description = "Interactive Git commit and branch graph with smooth curves, search, and diffs."
 platforms = ["macos", "linux"]
 
 [[build]]
-command = ["sh", "scripts/build.sh"]
+command = ["sh", "scripts/install.sh"]
 
 [[actions]]
 id = "open"

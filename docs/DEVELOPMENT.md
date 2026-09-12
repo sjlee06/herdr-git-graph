@@ -4,7 +4,7 @@
 
 ## Build and link locally
 
-Use Rust stable, Git, and a macOS or Linux environment.
+Source builds require Rust stable with Cargo on `PATH`, Git, and a macOS or Linux environment. Install Rust with [rustup](https://rustup.rs/) if needed. End-user installation uses `scripts/install.sh` and requires no Rust toolchain.
 
 ```bash
 git clone https://github.com/sjlee06/herdr-git-graph.git
@@ -22,11 +22,12 @@ After changing Rust code, rebuild and reopen the viewer. If you change the manif
 ./bin/herdr-git-graph --repo /path/to/repository --check
 ```
 
-`--demo` uses built-in sample data. `--check` summarizes the repository without opening a TUI. On macOS, `Demo.command` opens the sample view, building first if the executable is missing.
+`--demo` uses built-in sample data. `--check` summarizes the repository without opening a TUI. On macOS, `Demo.command` opens the sample view, downloading the matching release first if the executable is missing.
 
 ## Checks
 
 ```bash
+python3 tests/install.py
 cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
@@ -69,3 +70,11 @@ Graph layout is separate from rendering. Keep parent relationships intact across
 ## Contributing
 
 Keep changes focused and include relevant checks. For a rendering bug, include the Herdr version, outer terminal, local or remote connection, renderer mode, and a screenshot or minimal reproduction. For a graph bug, a small synthetic repository reproducing the topology is especially useful.
+
+## Releases
+
+Update the package version in `Cargo.toml`, `Cargo.lock`, and `herdr-plugin.toml` together, then push a matching `vX.Y.Z` tag. The [release workflow](../.github/workflows/release.yml) builds and tests native arm64 and x86_64 binaries for macOS and Linux before publishing all four binaries and their SHA-256 files to GitHub Releases. macOS builds target 11.0; Linux builds use Ubuntu 22.04 (glibc 2.35).
+
+`scripts/install.sh` selects the platform and downloads the exact manifest version, verifies the checksum and executable, then replaces `bin/herdr-git-graph`. It preserves an existing binary on failure. To explicitly build during a Herdr install, set `HERDR_GIT_GRAPH_BUILD_FROM_SOURCE=1`; local development can call `sh scripts/build.sh` directly. Download failures do not silently start a source build.
+
+`tests/install.py` checks all platform selections without using Cargo, both checksum tools, download failures, checksum corruption, preservation of an existing installation, temporary-file cleanup, and source-build error messages.

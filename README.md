@@ -23,7 +23,9 @@ A read-only Git graph viewer built with Rust and Ratatui. Browse local and remot
 
 ## Install
 
-Requires **Herdr 0.9.0+**, **Git 2.31+**, and **Rust stable with Cargo** on macOS or Linux. Installation builds the plugin from source, so Cargo must be available on `PATH`. See [rustup](https://rustup.rs/) if you need to install Rust.
+Requires **Herdr 0.9.0+**, **Git 2.31+**, and `curl`. **Rust and Cargo are not required.** The installer downloads a matching [release binary](https://github.com/sjlee06/herdr-git-graph/releases) and verifies its SHA-256 checksum using `shasum` or `sha256sum`.
+
+Prebuilt releases support **macOS 11+** and **Linux with glibc 2.35+** (for example, Ubuntu 22.04+), on Apple Silicon/ARM64 and x86_64. For other systems, see [source builds](docs/DEVELOPMENT.md).
 
 ```bash
 herdr plugin install sjlee06/herdr-git-graph
@@ -84,7 +86,7 @@ The viewer reads local Git data. To see new remote commits, fetch in your normal
 ```bash
 git clone https://github.com/sjlee06/herdr-git-graph.git
 cd herdr-git-graph
-sh scripts/build.sh
+sh scripts/install.sh
 
 ./bin/herdr-git-graph --demo
 ./bin/herdr-git-graph --repo /path/to/repository

@@ -74,7 +74,9 @@ Git subprocesses have a 15-second timeout, and diff previews are capped at 512 K
 
 | Symptom | What to check |
 | --- | --- |
-| Installation cannot find `cargo` | Install Rust stable and ensure Cargo is on the `PATH` used by Herdr. |
+| Installation cannot find `cargo` | Reinstall from GitHub to get v0.1.1 or later; release installs no longer need Rust. Only explicit source builds require Cargo. |
+| Release download fails | Check access to GitHub Releases and retry. No existing binary is replaced on a failed download or checksum mismatch. |
+| Release cannot run on this OS | Prebuilt binaries need macOS 11+ or Linux glibc 2.35+, on arm64/x86_64. See source builds for other environments. |
 | Plugin action is missing | Check `herdr plugin list` and `herdr plugin action list --plugin herdr.git-graph`. |
 | The configured key does nothing | Run the action directly, check for a conflicting binding, and reload the active session's configuration. |
 | The folder is not a Git repository | Open a Git workspace or pass `--repo` / `--cwd` explicitly. |
