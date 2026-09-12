@@ -18,6 +18,8 @@ A read-only Git graph viewer built with Rust and Ratatui. Browse local and remot
 
 - **Branch and merge graph** — colored lanes, branch and tag labels, and support for detached HEAD and linked worktrees.
 - **Commit inspector** — commit metadata, changed-file statistics, and colored diffs in one view.
+- **Uncommitted changes** — a working tree node above HEAD, with staged/unstaged diffs, untracked file names, and conflict counts.
+- **Live updates** — background checks every 2 seconds reflect local file, commit, and branch changes while preserving selection and scroll position.
 - **Search and navigation** — find a message, author, ref, or hash; navigate with the keyboard or mouse.
 - **Smooth curves with a text fallback** — antialiased Bézier connections through Herdr's graphics API, plus a Unicode renderer for ordinary terminals.
 
@@ -95,7 +97,9 @@ Select a branch and press **Enter** to show its history. Choose **All branches**
 
 Mouse clicks select items; the wheel scrolls the panel under the pointer. See the [usage guide](docs/USAGE.md) for all shortcuts, rendering options, and troubleshooting.
 
-The viewer reads local Git data. To see new remote commits, fetch in your normal Git workflow and press `r`. It does not run fetch, checkout, commit, merge, rebase, or push. Search covers the loaded history: **2,000 commits by default**, configurable with `--limit`.
+The viewer reads local Git data and automatically reflects saved files, staging, commits, and branch changes. Press `r` for an immediate reload. To see new remote commits, fetch in your normal Git workflow; the viewer picks up the local update. It does not run fetch, checkout, commit, merge, rebase, or push. Search covers the loaded history: **2,000 commits by default**, configurable with `--limit`.
+
+`Uncommitted changes` appears above HEAD in the all-refs view and the checked-out branch view, including before the first commit. The inspector separates staged and unstaged patches; untracked files are listed by name. Ignored untracked files are excluded. Background checks reuse history while refs and HEAD are unchanged, skip unchanged redraws, and back off for slow repositories. Use `--refresh-interval 5` to check less often or `--no-auto-refresh` for manual refresh only. See the [usage guide](docs/USAGE.md#uncommitted-changes-and-live-updates) for details.
 
 ## Run without Herdr
 

@@ -70,9 +70,10 @@ pub fn rasterize(graph: &Graph, view: Viewport, cell: (u32, u32)) -> Result<Pixm
             y + 0.5 * ch,
             row.color,
             index == view.selected,
+            row.uncommitted,
         ));
     }
-    for (x, y, color, selected) in nodes {
+    for (x, y, color, selected, uncommitted) in nodes {
         let rgb = PALETTE[color % PALETTE.len()];
         let mut paint = Paint::default();
         let radius = (cw * 0.34).max(2.5);
@@ -97,6 +98,19 @@ pub fn rasterize(graph: &Graph, view: Viewport, cell: (u32, u32)) -> Result<Pixm
                 Transform::identity(),
                 None,
             );
+        }
+        if uncommitted {
+            let bg = if selected { SELECT_RGB } else { BG_RGB };
+            paint.set_color_rgba8(bg.0, bg.1, bg.2, 255);
+            if let Some(path) = PathBuilder::from_circle(x, y, radius * 0.55) {
+                pixmap.fill_path(
+                    &path,
+                    &paint,
+                    FillRule::Winding,
+                    Transform::identity(),
+                    None,
+                );
+            }
         }
     }
     Ok(pixmap)

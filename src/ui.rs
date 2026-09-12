@@ -104,7 +104,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, smooth: bool) -> Option<Viewport> 
             } else {
                 &app.renderer_status
             },
-            app.repo.commits.len()
+            app.repo.commit_count()
         ))
         .right_aligned()
         .style(Style::default().fg(MUTED)),
@@ -217,7 +217,11 @@ fn sidebar(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
             "{}/{}{} · {}",
             if count == 0 { 0 } else { app.selected + 1 },
             count,
-            if count == app.limit { " (limit)" } else { "" },
+            if app.repo.commit_count() == app.limit {
+                " (limit)"
+            } else {
+                ""
+            },
             clean(&app.status),
         )
     };
@@ -322,7 +326,11 @@ fn branches(frame: &mut Frame, app: &mut App, area: Rect) {
                     " {} refs · Enter to apply",
                     app.repo.branches.len()
                 )),
-                Line::from(" Local history · r to reload"),
+                Line::from(if app.refresh_interval.is_some() {
+                    " Live updates · r to reload"
+                } else {
+                    " Local history · r to reload"
+                }),
             ])
             .style(Style::default().fg(MUTED)),
             foot,
@@ -394,8 +402,12 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
     }
     if app.repo.commits.is_empty() {
         frame.render_widget(
-            Paragraph::new("\n No commits yet.\n Create a commit, then press r.")
-                .style(Style::default().fg(MUTED)),
+            Paragraph::new(if app.refresh_interval.is_some() {
+                "\n No commits or changes yet.\n Watching for local changes…"
+            } else {
+                "\n No commits or changes yet.\n Make a change, then press r."
+            })
+            .style(Style::default().fg(MUTED)),
             body,
         );
         return None;
@@ -418,7 +430,11 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
             Block::default().style(Style::default().bg(bg)),
             Rect::new(body.x, y, body.width, 1),
         );
-        let short: String = commit.oid.chars().take(7).collect();
+        let short: String = if commit.is_worktree() {
+            "WIP".into()
+        } else {
+            commit.oid.chars().take(7).collect()
+        };
         let is_match = !app.query.is_empty()
             && [&commit.subject, &commit.author, &commit.refs, &commit.oid]
                 .iter()
@@ -531,11 +547,24 @@ fn text_graph(frame: &mut Frame, row: &crate::graph::Row, area: Rect, y: u16, of
         put(a, y + 1, if a < b { "╰" } else { "╯" }, edge.color, true);
         put(b, y + 1, if a < b { "╮" } else { "╭" }, edge.color, true);
     }
-    put(row.column * 3 + 1, y, "●", row.color, false);
+    put(
+        row.column * 3 + 1,
+        y,
+        if row.uncommitted { "○" } else { "●" },
+        row.color,
+        false,
+    );
 }
 
 fn details(frame: &mut Frame, app: &mut App, area: Rect) {
-    let b = block("COMMIT INSPECTOR", app.focus == Focus::Details);
+    let b = block(
+        if app.selected_oid() == Some(crate::git::WORKTREE_OID) {
+            "WORKING TREE"
+        } else {
+            "COMMIT INSPECTOR"
+        },
+        app.focus == Focus::Details,
+    );
     let inner = b.inner(area);
     app.detail_area = area;
     frame.render_widget(b, area);
@@ -573,7 +602,7 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
             "{} / {}{}",
             app.selected + 1,
             app.repo.commits.len(),
-            if app.repo.commits.len() == app.limit {
+            if app.repo.commit_count() == app.limit {
                 " · limit reached"
             } else {
                 ""

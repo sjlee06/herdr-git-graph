@@ -25,6 +25,7 @@ pub struct Edge {
 
 #[derive(Clone, Debug)]
 pub struct Row {
+    pub uncommitted: bool,
     pub column: usize,
     pub color: usize,
     pub above: Vec<Option<Lane>>,
@@ -109,6 +110,7 @@ impl Graph {
             }
             graph.width = graph.width.max(lanes.len()).max(column + 1);
             graph.rows.push(Row {
+                uncommitted: commit.is_worktree(),
                 column,
                 color,
                 above,

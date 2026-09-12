@@ -20,8 +20,19 @@ pub enum Focus {
 }
 
 pub enum Request {
-    Load { reference: Option<String>, id: u64 },
-    Detail { oid: String },
+    Load {
+        reference: Option<String>,
+        id: u64,
+    },
+    Refresh {
+        reference: Option<String>,
+        id: u64,
+        detail: bool,
+    },
+    Detail {
+        oid: String,
+        id: u64,
+    },
 }
 
 pub enum Response {
@@ -32,7 +43,14 @@ pub enum Response {
     },
     Detail {
         oid: String,
+        id: u64,
         result: Result<String, String>,
+    },
+    Refreshed {
+        result: Result<Repository, String>,
+        detail: Option<Result<String, String>>,
+        id: u64,
+        elapsed: Duration,
     },
 }
 
@@ -46,25 +64,67 @@ impl Worker {
         let (sender, requests) = mpsc::channel();
         let (responses, receiver) = mpsc::channel();
         thread::spawn(move || {
-            while let Ok(mut request) = requests.recv() {
-                // Coalesce queued navigation requests to keep rapid key repeats responsive.
-                while let Ok(newer) = requests.try_recv() {
-                    request = newer;
+            let mut previous = None;
+            while let Ok(request) = requests.recv() {
+                // Coalesce within each request kind; a diff must never discard a refresh/load.
+                let mut load = None;
+                let mut refresh = None;
+                let mut detail = None;
+                for request in std::iter::once(request).chain(requests.try_iter()) {
+                    match request {
+                        Request::Load { .. } => load = Some(request),
+                        Request::Refresh { .. } => refresh = Some(request),
+                        Request::Detail { .. } => detail = Some(request),
+                    }
                 }
-                let response = match request {
-                    Request::Load { reference, id } => Response::Loaded {
-                        result: git::load(&root, reference.as_deref(), limit)
-                            .map_err(|e| format!("{e:#}")),
-                        reference,
-                        id,
-                    },
-                    Request::Detail { oid } => Response::Detail {
-                        result: git::details(&root, &oid).map_err(|e| format!("{e:#}")),
-                        oid,
-                    },
-                };
-                if responses.send(response).is_err() {
-                    break;
+                for request in [load, refresh, detail].into_iter().flatten() {
+                    let response = match request {
+                        Request::Load { reference, id } => {
+                            let result = git::load(&root, reference.as_deref(), limit)
+                                .map_err(|e| format!("{e:#}"));
+                            if let Ok(repo) = &result {
+                                previous = Some(repo.clone());
+                            }
+                            Response::Loaded {
+                                result,
+                                reference,
+                                id,
+                            }
+                        }
+                        Request::Refresh {
+                            reference,
+                            id,
+                            detail,
+                        } => {
+                            let start = Instant::now();
+                            let result = match &previous {
+                                Some(repo) => git::refresh(repo, reference.as_deref(), limit),
+                                None => git::load(&root, reference.as_deref(), limit),
+                            }
+                            .map_err(|e| format!("{e:#}"));
+                            let detail = result.as_ref().ok().filter(|_| detail).map(|repo| {
+                                git::working_tree_details(&root, &repo.worktree)
+                                    .map_err(|e| format!("{e:#}"))
+                            });
+                            if let Ok(repo) = &result {
+                                previous = Some(repo.clone());
+                            }
+                            Response::Refreshed {
+                                result,
+                                detail,
+                                id,
+                                elapsed: start.elapsed(),
+                            }
+                        }
+                        Request::Detail { oid, id } => Response::Detail {
+                            result: git::details(&root, &oid).map_err(|e| format!("{e:#}")),
+                            oid,
+                            id,
+                        },
+                    };
+                    if responses.send(response).is_err() {
+                        return;
+                    }
                 }
             }
         });
@@ -100,6 +160,9 @@ pub struct App {
     pub demo: bool,
     pub limit: usize,
     pub load_id: u64,
+    pub refresh_interval: Option<Duration>,
+    refresh_due: Instant,
+    refreshing: bool,
     detail_due: Instant,
     requested_oid: Option<String>,
     cache: HashMap<String, String>,
@@ -128,7 +191,12 @@ impl App {
             detail_area: Rect::default(),
             history_area: Rect::default(),
             branches_area: Rect::default(),
-            status: "Ready · local Git history".into(),
+            status: if demo {
+                "Demo · local Git history"
+            } else {
+                "Live · local Git history"
+            }
+            .into(),
             renderer_status: "TEXT".into(),
             reference: None,
             loading: false,
@@ -136,6 +204,9 @@ impl App {
             demo,
             limit,
             load_id: 0,
+            refresh_interval: (!demo).then_some(Duration::from_secs(2)),
+            refresh_due: Instant::now() + Duration::from_secs(2),
+            refreshing: false,
             detail_due: Instant::now(),
             requested_oid: None,
             cache: HashMap::new(),
@@ -153,6 +224,37 @@ impl App {
 
     pub fn selected_oid(&self) -> Option<&str> {
         self.repo.commits.get(self.selected).map(|c| c.oid.as_str())
+    }
+
+    pub fn with_refresh_interval(mut self, interval: Option<Duration>) -> Self {
+        self.refresh_interval = interval.filter(|_| !self.demo);
+        self.refresh_due = Instant::now() + interval.unwrap_or_default();
+        if self.refresh_interval.is_none() && !self.demo {
+            self.status = "Ready · manual refresh".into();
+        }
+        self
+    }
+
+    pub fn request_refresh(&mut self, worker: &Worker) {
+        if self.demo
+            || self.loading
+            || self.refreshing
+            || self.refresh_interval.is_none()
+            || Instant::now() < self.refresh_due
+        {
+            return;
+        }
+        if worker
+            .sender
+            .send(Request::Refresh {
+                reference: self.reference.clone(),
+                id: self.load_id,
+                detail: self.show_details && self.selected_oid() == Some(git::WORKTREE_OID),
+            })
+            .is_ok()
+        {
+            self.refreshing = true;
+        }
     }
 
     pub fn selection_changed(&mut self) {
@@ -180,12 +282,15 @@ impl App {
             && !self.cache.contains_key(&oid)
             && self.requested_oid.as_ref() != Some(&oid)
         {
-            let _ = worker.sender.send(Request::Detail { oid: oid.clone() });
+            let _ = worker.sender.send(Request::Detail {
+                oid: oid.clone(),
+                id: self.load_id,
+            });
             self.requested_oid = Some(oid);
         }
     }
 
-    pub fn apply(&mut self, response: Response) {
+    pub fn apply(&mut self, response: Response) -> bool {
         match response {
             Response::Loaded {
                 result,
@@ -217,18 +322,109 @@ impl App {
                     Err(error) => self.status = format!("Error: {error}"),
                 }
             }
-            Response::Detail { oid, result } => {
+            Response::Refreshed {
+                result,
+                detail,
+                id,
+                elapsed,
+            } => {
+                self.refreshing = false;
+                // Slow status/diff scans automatically get more idle time; never queue polls.
+                self.refresh_due = Instant::now()
+                    + self
+                        .refresh_interval
+                        .unwrap_or(Duration::from_secs(2))
+                        .max(elapsed.saturating_mul(4));
+                if id != self.load_id || self.loading {
+                    return false;
+                }
+                let repo = match result {
+                    Ok(repo) => repo,
+                    Err(error) => {
+                        self.refresh_due =
+                            Instant::now() + Duration::from_secs(10).max(elapsed.saturating_mul(4));
+                        let status = format!("Auto-refresh failed (will retry): {error}");
+                        let changed = self.status != status;
+                        self.status = status;
+                        return changed;
+                    }
+                };
+                let mut changed = self.repo != repo;
+                if changed {
+                    let old = self.selected_oid().map(str::to_owned);
+                    let old_top = self.top;
+                    let old_selected = self.selected;
+                    let branch = self
+                        .branch_selected
+                        .checked_sub(1)
+                        .and_then(|i| self.repo.branches.get(i))
+                        .map(|b| b.reference.clone());
+                    self.repo = repo;
+                    self.graph = Graph::build(&self.repo.commits);
+                    self.selected = old
+                        .as_ref()
+                        .and_then(|oid| self.repo.commits.iter().position(|c| &c.oid == oid))
+                        .or_else(|| {
+                            self.repo
+                                .head_oid
+                                .as_ref()
+                                .filter(|_| old.as_deref() == Some(git::WORKTREE_OID))
+                                .and_then(|oid| {
+                                    self.repo.commits.iter().position(|c| &c.oid == oid)
+                                })
+                        })
+                        .unwrap_or_else(|| {
+                            old_selected.min(self.repo.commits.len().saturating_sub(1))
+                        });
+                    self.top = if old_top == 0 {
+                        0
+                    } else {
+                        old_top
+                            .saturating_add_signed(self.selected as isize - old_selected as isize)
+                    };
+                    self.branch_selected = branch
+                        .and_then(|r| self.repo.branches.iter().position(|b| b.reference == r))
+                        .map(|i| i + 1)
+                        .unwrap_or(0);
+                    if self.selected_oid() != old.as_deref() {
+                        self.selection_changed();
+                    }
+                }
+                if self.selected_oid() == Some(git::WORKTREE_OID) {
+                    if let Some(detail) = detail {
+                        let text = detail.unwrap_or_else(|e| format!("Cannot load changes: {e}"));
+                        changed |= self.detail != text;
+                        self.detail = text;
+                        self.detail_scroll = self
+                            .detail_scroll
+                            .min(self.detail.lines().count().saturating_sub(1));
+                        self.requested_oid = Some(git::WORKTREE_OID.into());
+                    } else if changed {
+                        self.requested_oid = None;
+                    }
+                }
+                if changed || self.status.starts_with("Auto-refresh failed") {
+                    self.status = "Live · repository updated".into();
+                    return true;
+                }
+                return false;
+            }
+            Response::Detail { oid, id, result } if id == self.load_id => {
                 let text = result.unwrap_or_else(|e| format!("Cannot load commit: {e}"));
                 if self.selected_oid() == Some(&oid) {
                     self.detail = text.clone();
+                }
+                if oid == git::WORKTREE_OID {
+                    return true;
                 }
                 if self.cache.len() >= 64 {
                     self.cache.clear();
                 }
                 self.cache.insert(oid, text);
             }
-            _ => {}
+            _ => return false,
         }
+        true
     }
 
     pub fn load(&mut self, reference: Option<String>, worker: Option<&Worker>) {
@@ -463,6 +659,144 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn with_worktree(mut repo: Repository) -> Repository {
+        repo.commits.insert(
+            0,
+            git::Commit {
+                oid: git::WORKTREE_OID.into(),
+                parents: repo.head_oid.iter().cloned().collect(),
+                subject: "Uncommitted changes".into(),
+                refs: "1 unstaged".into(),
+                author: "Working tree".into(),
+                date: String::new(),
+            },
+        );
+        repo
+    }
+
+    fn refreshed(repo: Repository, detail: Option<&str>) -> Response {
+        Response::Refreshed {
+            result: Ok(repo),
+            detail: detail.map(|s| Ok(s.into())),
+            id: 0,
+            elapsed: Duration::ZERO,
+        }
+    }
+
+    #[test]
+    fn background_refresh_preserves_selection_scroll_and_reveals_worktree_at_top() {
+        let mut app = App::new(git::demo(), 2000, false);
+        app.detail = "existing commit diff".into();
+        app.detail_scroll = 4;
+        app.graph_offset = 3;
+        let oid = app.selected_oid().unwrap().to_owned();
+        let changed = with_worktree(app.repo.clone());
+        assert!(app.apply(refreshed(changed, None)));
+        assert_eq!(app.selected_oid(), Some(oid.as_str()));
+        assert_eq!(app.selected, 1);
+        assert_eq!(app.top, 0);
+        assert_eq!(app.graph_offset, 3);
+        assert_eq!(app.detail_scroll, 4);
+        assert_eq!(app.detail, "existing commit diff");
+
+        app.selected = 7;
+        app.top = 5;
+        let oid = app.selected_oid().unwrap().to_owned();
+        assert!(app.apply(refreshed(git::demo(), None)));
+        assert_eq!(app.selected_oid(), Some(oid.as_str()));
+        assert_eq!(app.top, 4);
+        assert_eq!(app.selected - app.top, 2);
+    }
+
+    #[test]
+    fn unchanged_refresh_does_not_redraw_and_mutable_diff_is_not_cached() {
+        let mut app = App::new(with_worktree(git::demo()), 2000, false);
+        app.detail = "old\nsecond line\n".into();
+        app.detail_scroll = 1;
+        assert!(!app.apply(refreshed(app.repo.clone(), Some("old\nsecond line\n"))));
+        assert!(app.apply(refreshed(app.repo.clone(), Some("new\nsecond line\n"))));
+        assert_eq!(app.detail_scroll, 1);
+        assert!(app.detail.starts_with("new"));
+        assert!(!app.cache.contains_key(git::WORKTREE_OID));
+        app.apply(Response::Detail {
+            oid: git::WORKTREE_OID.into(),
+            id: 0,
+            result: Ok("fresh diff".into()),
+        });
+        assert!(!app.cache.contains_key(git::WORKTREE_OID));
+        app.apply(refreshed(git::demo(), None));
+        assert_eq!(app.selected_oid(), Some("a31c9f0"));
+    }
+
+    #[test]
+    fn refresh_is_single_flight_nonblocking_and_disabled_in_manual_mode() {
+        let mut app = App::new(git::demo(), 2000, false).with_sidebar(true);
+        let (sender, requests) = mpsc::channel();
+        let (_, receiver) = mpsc::channel();
+        let worker = Worker { sender, receiver };
+        app.refresh_due = Instant::now();
+        app.request_refresh(&worker);
+        assert!(matches!(
+            requests.try_recv(),
+            Ok(Request::Refresh { detail: false, .. })
+        ));
+        assert!(!app.loading);
+        app.request_refresh(&worker);
+        assert!(requests.try_recv().is_err());
+        app.key(
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+            Some(&worker),
+        );
+        assert_eq!(app.selected, 1);
+        app.apply(Response::Refreshed {
+            result: Ok(app.repo.clone()),
+            detail: None,
+            id: 0,
+            elapsed: Duration::from_secs(3),
+        });
+        assert!(app.refresh_due > Instant::now() + Duration::from_secs(11));
+        app.refresh_due = Instant::now();
+        app.refresh_interval = None;
+        app.request_refresh(&worker);
+        assert!(requests.try_recv().is_err());
+        app.key(
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+            Some(&worker),
+        );
+        assert!(matches!(requests.try_recv(), Ok(Request::Load { .. })));
+    }
+
+    #[test]
+    fn stale_refresh_and_diff_cannot_overwrite_new_branch_view() {
+        let mut app = App::new(git::demo(), 2000, false);
+        app.load_id = 2;
+        app.detail = "current detail".into();
+        assert!(!app.apply(refreshed(with_worktree(git::demo()), None)));
+        assert!(!app.repo.commits[0].is_worktree());
+        assert!(!app.apply(Response::Detail {
+            oid: app.selected_oid().unwrap().into(),
+            id: 1,
+            result: Ok("stale detail".into())
+        }));
+        assert_eq!(app.detail, "current detail");
+    }
+
+    #[test]
+    fn refresh_failure_keeps_history_and_recovers_without_user_input() {
+        let mut app = App::new(git::demo(), 2000, false);
+        app.apply(Response::Refreshed {
+            result: Err("repository temporarily unavailable".into()),
+            detail: None,
+            id: 0,
+            elapsed: Duration::ZERO,
+        });
+        assert_eq!(app.repo.commit_count(), 10);
+        assert!(app.status.starts_with("Auto-refresh failed"));
+        assert!(app.apply(refreshed(app.repo.clone(), None)));
+        assert!(!app.status.contains("failed"));
+    }
+
     #[test]
     fn sidebar_keeps_navigation_in_history_and_skips_diff_reads() {
         let mut app = App::new(git::demo(), 2000, false).with_sidebar(true);

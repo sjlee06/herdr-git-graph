@@ -43,6 +43,12 @@ struct Args {
     /// Maximum commits to load per branch view
     #[arg(long, default_value_t = 2000, value_parser = clap::value_parser!(u32).range(1..=50000))]
     limit: u32,
+    /// Seconds between background checks (slow checks automatically back off)
+    #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u64).range(1..=3600))]
+    refresh_interval: u64,
+    /// Disable automatic refresh; use r to reload manually
+    #[arg(long)]
+    no_auto_refresh: bool,
     /// Open built-in sample history without a Git repository
     #[arg(long)]
     demo: bool,
@@ -98,15 +104,20 @@ fn main() -> Result<()> {
     } else {
         git::load(&root, None, args.limit as usize)?
     };
-    let mut app = App::new(repo, args.limit as usize, args.demo).with_sidebar(args.sidebar);
+    let mut app = App::new(repo, args.limit as usize, args.demo)
+        .with_sidebar(args.sidebar)
+        .with_refresh_interval(
+            (!args.no_auto_refresh).then_some(Duration::from_secs(args.refresh_interval)),
+        );
     if args.check {
         println!(
-            "Repository: {}\nHEAD: {}\nBranches: {}\nCommits: {}\nGraph lanes: {}",
+            "Repository: {}\nHEAD: {}\nBranches: {}\nCommits: {}\nGraph lanes: {}\nUncommitted files: {}",
             app.repo.root.display(),
             app.repo.head,
             app.repo.branches.len(),
-            app.repo.commits.len(),
-            app.graph.width
+            app.repo.commit_count(),
+            app.graph.width,
+            app.repo.worktree.files.len()
         );
         return Ok(());
     }
@@ -184,10 +195,10 @@ fn main() -> Result<()> {
     while !app.quit && !stop.load(Ordering::Relaxed) {
         if let Some(worker) = &worker {
             while let Ok(response) = worker.receiver.try_recv() {
-                app.apply(response);
-                dirty = true;
+                dirty |= app.apply(response);
             }
             app.request_detail(worker);
+            app.request_refresh(worker);
         }
         if dirty {
             let mut viewport = None;

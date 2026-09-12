@@ -18,7 +18,7 @@ import time
 
 
 class Terminal:
-    def __init__(self, binary, extra=(), env=None, size=(140, 44)):
+    def __init__(self, binary, extra=(), env=None, size=(140, 44), demo=True):
         self.master, self.slave = pty.openpty()
         self.original = termios.tcgetattr(self.slave)
         self.output = bytearray()
@@ -28,7 +28,7 @@ class Terminal:
             child_env.pop(key, None)
         child_env.update(env or {})
         self.process = subprocess.Popen(
-            [str(binary), "--demo", *extra], stdin=self.slave,
+            [str(binary), *(["--demo"] if demo else []), *extra], stdin=self.slave,
             stdout=self.slave, stderr=self.slave, env=child_env,
             start_new_session=True,
         )
@@ -187,6 +187,53 @@ def main():
     assert b"COMMIT INSPECTOR" not in terminal.output
     assert b"BRANCHES" not in terminal.output
     print("PASS: narrow sidebar, search, graph-only focus, mouse, resize, cleanup")
+
+    with tempfile.TemporaryDirectory(prefix="live-", dir=args.work) as temporary:
+        repo = Path(temporary)
+        def git(*arguments):
+            subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test",
+                            "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false",
+                            *arguments], check=True, capture_output=True)
+        git("init", "-b", "main")
+        tracked = repo / "tracked.txt"
+        tracked.write_text("initial\n")
+        git("add", ".")
+        git("commit", "-m", "initial")
+        terminal = Terminal(binary, ["--repo", str(repo), "--renderer", "text", "--refresh-interval", "1"], demo=False)
+        terminal.ready()
+
+        def wait_for(text):
+            deadline = time.monotonic() + 6
+            while text not in terminal.output and time.monotonic() < deadline:
+                terminal.pump(0.1)
+            assert text in terminal.output, repr(bytes(terminal.output)[-4000:])
+
+        tracked.write_text("AAAAAAAAAAAA\n")
+        wait_for(b"Uncommitted changes")
+        terminal.send("g")
+        wait_for(b"Files (index / working tree):")
+        terminal.send("\rG")
+        wait_for(b"AAAAAAAAAAAA")
+        terminal.output.clear()
+        tracked.write_text("ZZZZZZZZZZZZ\n")
+        wait_for(b"ZZZZZZZZZZZZ")
+        terminal.output.clear()
+        git("add", ".")
+        git("commit", "-m", "live commit")
+        wait_for(b"live commit")
+        terminal.finish()
+        print("PASS: live PTY file edits, mutable diff refresh and external commit without r")
+
+        terminal = Terminal(binary, ["--repo", str(repo), "--sidebar", "--renderer", "text",
+                                     "--refresh-interval", "1", "--no-auto-refresh"], demo=False)
+        terminal.ready()
+        tracked.write_text("manual only\n")
+        terminal.pump(1.8)
+        assert b"Uncommitted changes" not in terminal.output
+        terminal.send("r")
+        wait_for(b"Uncommitted changes")
+        terminal.finish()
+        print("PASS: auto-refresh opt-out and manual sidebar reload")
 
     with tempfile.TemporaryDirectory(prefix="rpc-", dir=args.work) as temporary:
         # UNIX socket paths have a small platform-specific maximum length.

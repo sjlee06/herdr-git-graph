@@ -36,6 +36,23 @@ The action takes its target from the invocation's focused pane. When opening the
 
 Suggested bindings are `prefix+u` for `herdr.git-graph.open` and `prefix+shift+u` for `herdr.git-graph.sidebar`; see the [README config example](../README.md#add-a-keybinding). Avoid `prefix+g` (`goto`) and `prefix+shift+g` (new worktree), which Herdr already binds by default. Validate with `herdr config check` before reloading the configuration.
 
+## Uncommitted changes and live updates
+
+When the current checkout has changes, a hollow `WIP` node labeled **Uncommitted changes** appears above HEAD. Its second line counts staged, unstaged, untracked, and conflicted files. A partially staged file contributes to both staged and unstaged counts. The node appears in the all-refs view and when filtering the checked-out local branch, including detached HEAD and repositories with no commits. Other branch filters omit it. It does not count toward `--limit` or the commit count.
+
+Select the node in the full view to see file statuses and separate staged and unstaged patches. Rename paths and conflicts are included. Untracked files are listed as `??`; their contents are not included in the patch. Ignored untracked files are omitted. The sidebar shows the node and counts without loading diffs.
+
+Local changes are checked in a background worker every **2 seconds**, so updates normally appear within about 2 seconds plus Git query time. File edits, staging, commits, tags, checkout, and local ref updates after a fetch are picked up automatically. The displayed working tree diff is reread even if a file's status remains modified after another edit. Existing selection, search, focus, and scroll position are preserved where possible; when a selected WIP node disappears, selection moves to HEAD.
+
+```bash
+./bin/herdr-git-graph --refresh-interval 5
+./bin/herdr-git-graph --no-auto-refresh
+```
+
+This uses Git polling, not a recursive OS filesystem watcher. There is at most one automatic check pending, and the next check waits at least the configured interval or four times the previous check's duration, whichever is longer. Unchanged HEAD and refs reuse the loaded commit history; unchanged screens are not redrawn. Patches are loaded only when the working tree inspector is visible. Failed checks retain the current view and retry after a backoff. Large repositories can still make `git status` expensive; increase the interval or disable polling if needed. `r` always forces a manual reload. Demo and headless commands do not poll.
+
+Git runs with `--no-optional-locks`, so background status queries do not rewrite the index or acquire its optional refresh lock. The viewer performs no staging, checkout, fetch, or other repository writes.
+
 ## Keyboard and mouse
 
 | Input | Action |
@@ -90,9 +107,9 @@ Detached HEAD commits are included in the all-refs view. A shallow clone only sh
 
 The default limit is 2,000 commits; accepted values range from 1 to 50,000. Search only covers the loaded commits. The footer indicates when a limit is reached. Wide graphs can be panned with `h` / `l`.
 
-Press `r` to reread local refs and history. Obtain new remote commits with your existing Git workflow, then reload the viewer. This version does not provide Git writes, GitHub PR data, automatic fetch, or filesystem watching.
+Press `r` to immediately reread local refs, history, and working tree changes. Obtain new remote commits with your existing Git workflow; automatic refresh picks up the resulting local changes. This version does not provide Git writes, GitHub PR data, or automatic fetch.
 
-Git subprocesses have a 15-second timeout, and diff previews are capped at 512 KiB. Pagers, external diff programs, and textconv are disabled. Repository reloads and commit detail reads run in a background worker; the first load occurs before the TUI opens.
+Git subprocesses have a 15-second timeout, and each patch preview is capped at 512 KiB (separately for staged and unstaged changes). Pagers, external diff programs, and textconv are disabled. Repository reloads and detail reads run in a background worker; the first load occurs before the TUI opens.
 
 ## Troubleshooting
 
@@ -105,7 +122,8 @@ Git subprocesses have a 15-second timeout, and diff previews are capped at 512 K
 | Sidebar action says `running` but no pane appears | This response only acknowledges launch. Inspect `herdr plugin log list --plugin herdr.git-graph`. Version 0.2.0 incorrectly passed `--workspace` for a split; reinstall to get 0.2.1 or later. |
 | The configured key does nothing | Run the action directly, check for a conflicting binding, and reload the active session's configuration. |
 | The folder is not a Git repository | Open a Git workspace or pass `--repo` / `--cwd` explicitly. |
-| No commits appear | An empty repository needs its first commit. Then press `r`. |
+| No commits appear | An empty repository has no history yet; new files appear as Uncommitted changes. Clear branch filters with `a`. |
+| Updates are slow | Check whether Git status is slow or `--no-auto-refresh` is set. Automatic checks back off in slow repositories; `r` requests an immediate reload. |
 | A commit cannot be found | Clear the branch filter with `a`, fetch if needed, or increase `--limit`. |
 | Curves are unavailable | Run inside Herdr, check the outer terminal and graphics setting, or use `--renderer text`. |
 | A pane is too small | Resize it; the full view needs 64 × 18, and `--sidebar` needs 24 × 8. |
