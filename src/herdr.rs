@@ -21,16 +21,29 @@ pub fn repository_path(explicit: Option<&Path>) -> Result<PathBuf> {
     {
         return Ok(root);
     }
-    let context: Value = env::var("HERDR_PLUGIN_CONTEXT_JSON")
-        .ok()
-        .and_then(|v| serde_json::from_str(&v).ok())
-        .unwrap_or(Value::Null);
+    let context = plugin_context();
     for path in context_paths(&context) {
         if let Ok(root) = crate::git::discover(&path) {
             return Ok(root);
         }
     }
     crate::git::discover(&cwd)
+}
+
+fn plugin_context() -> Value {
+    env::var("HERDR_PLUGIN_CONTEXT_JSON")
+        .ok()
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or(Value::Null)
+}
+
+fn context_id(context: &Value, key: &str, fallback_env: &str) -> Option<String> {
+    context
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .or_else(|| env::var(fallback_env).ok().filter(|id| !id.is_empty()))
 }
 
 pub fn context_paths(context: &Value) -> Vec<PathBuf> {
@@ -56,6 +69,7 @@ pub fn open_sidebar(root: &Path) -> Result<()> {
 }
 
 fn open_view(root: &Path, sidebar: bool) -> Result<()> {
+    let context = plugin_context();
     let bin = env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
     let mut command = Command::new(bin);
     command
@@ -76,12 +90,14 @@ fn open_view(root: &Path, sidebar: bool) -> Result<()> {
         .arg("--env")
         .arg(format!("HERDR_GIT_GRAPH_REPO={}", root.display()));
     if sidebar {
-        command.args(["--direction", "right"]);
-        if let Ok(id) = env::var("HERDR_PANE_ID") {
-            command.arg("--target-pane").arg(id);
-        }
-    }
-    if let Ok(id) = env::var("HERDR_WORKSPACE_ID") {
+        // Herdr actions carry their source pane in the invocation context.
+        // Split placement accepts a target pane, but rejects workspace_id.
+        let id = context_id(&context, "focused_pane_id", "HERDR_PANE_ID")
+            .context("사이드바를 열 대상 패널이 없습니다. Herdr 패널 안에서 액션을 실행하세요.")?;
+        command
+            .args(["--direction", "right", "--target-pane"])
+            .arg(id);
+    } else if let Some(id) = context_id(&context, "workspace_id", "HERDR_WORKSPACE_ID") {
         command.arg("--workspace").arg(id);
     }
     let status = command.status().context("Herdr를 실행할 수 없습니다.")?;

@@ -20,7 +20,8 @@ herdr plugin action invoke herdr.git-graph.sidebar
 
 # Open the registered sidebar explicitly
 herdr plugin pane open --plugin herdr.git-graph --entrypoint sidebar \
-  --placement split --direction right --cwd /path/to/repository --no-focus
+  --placement split --direction right --target-pane "$HERDR_PANE_ID" \
+  --cwd /path/to/repository --no-focus
 
 # Use graph-only layout in an existing terminal pane, or preview it
 ./bin/herdr-git-graph --repo /path/to/repository --sidebar
@@ -30,6 +31,8 @@ herdr plugin pane open --plugin herdr.git-graph --entrypoint sidebar \
 The sidebar displays only the history graph and commit list, with repository and HEAD context above it. Commit subjects occupy the first line; hashes and ref labels occupy the second. The branch list, author/date columns, and diff inspector are hidden. Commit diffs are not loaded in this mode.
 
 The minimum size is 24 columns × 8 rows. Adjust the split width by dragging the divider or using Herdr's resize mode (`prefix+r` by default). Focus it with `prefix+l` from the pane on its left. Search, `n`/`N`, navigation, graph panning, mouse selection/scrolling, `r`, help, and quit work as usual. `Tab`, `Shift-Tab`, `Enter` outside search, and `d` keep the graph-only layout. Close the sidebar with `q` while it is focused. Each open action creates a new split.
+
+The action takes its target from the invocation's focused pane. When opening the pane explicitly, run the command above inside Herdr, or pass a known pane ID with `--target-pane`. Split panes must not use `--workspace`.
 
 Suggested bindings are `prefix+u` for `herdr.git-graph.open` and `prefix+shift+u` for `herdr.git-graph.sidebar`; see the [README config example](../README.md#add-a-keybinding). Avoid `prefix+g` (`goto`) and `prefix+shift+g` (new worktree), which Herdr already binds by default. Validate with `herdr config check` before reloading the configuration.
 
@@ -99,6 +102,7 @@ Git subprocesses have a 15-second timeout, and diff previews are capped at 512 K
 | Release download fails | Check access to GitHub Releases and retry. No existing binary is replaced on a failed download or checksum mismatch. |
 | Release cannot run on this OS | Prebuilt binaries need macOS 11+ or Linux glibc 2.35+, on arm64/x86_64. See source builds for other environments. |
 | Plugin action is missing | Check `herdr plugin list` and `herdr plugin action list --plugin herdr.git-graph`. |
+| Sidebar action says `running` but no pane appears | This response only acknowledges launch. Inspect `herdr plugin log list --plugin herdr.git-graph`. Version 0.2.0 incorrectly passed `--workspace` for a split; reinstall to get 0.2.1 or later. |
 | The configured key does nothing | Run the action directly, check for a conflicting binding, and reload the active session's configuration. |
 | The folder is not a Git repository | Open a Git workspace or pass `--repo` / `--cwd` explicitly. |
 | No commits appear | An empty repository needs its first commit. Then press `r`. |

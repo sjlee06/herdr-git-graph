@@ -1,9 +1,8 @@
 #![cfg(unix)]
 
-use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, process::Command};
 
-#[test]
-fn launchers_preserve_repository_context_and_choose_the_correct_layout() {
+fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     let temp = tempfile::tempdir().unwrap();
     let repo = temp.path().join("repo with spaces");
     fs::create_dir(&repo).unwrap();
@@ -25,6 +24,12 @@ fn launchers_preserve_repository_context_and_choose_the_correct_layout() {
     )
     .unwrap();
     fs::set_permissions(&herdr, fs::Permissions::from_mode(0o755)).unwrap();
+    (temp, repo, herdr, capture)
+}
+
+#[test]
+fn launchers_preserve_repository_context_and_choose_the_correct_layout() {
+    let (_temp, repo, herdr, capture) = fixture();
     for sidebar in [false, true] {
         let output = Command::new(env!("CARGO_BIN_EXE_herdr-git-graph"))
             .arg(if sidebar {
@@ -37,6 +42,7 @@ fn launchers_preserve_repository_context_and_choose_the_correct_layout() {
             .env("HERDR_BIN_PATH", &herdr)
             .env("HERDR_WORKSPACE_ID", "w-test")
             .env("HERDR_PANE_ID", "w-test:p-source")
+            .env_remove("HERDR_PLUGIN_CONTEXT_JSON")
             .env("HGG_CAPTURE", &capture)
             .env_remove("HGG_EXIT")
             .output()
@@ -60,13 +66,14 @@ fn launchers_preserve_repository_context_and_choose_the_correct_layout() {
             value("--env"),
             format!("HERDR_GIT_GRAPH_REPO={}", repo.display())
         );
-        assert_eq!(value("--workspace"), "w-test");
         if sidebar {
+            assert!(!args.contains(&"--workspace"));
             assert_eq!(value("--direction"), "right");
             assert_eq!(value("--target-pane"), "w-test:p-source");
             assert!(args.contains(&"--no-focus"));
             assert!(!args.contains(&"--focus"));
         } else {
+            assert_eq!(value("--workspace"), "w-test");
             assert!(args.contains(&"--focus"));
             assert!(!args.contains(&"--direction"));
         }
@@ -77,10 +84,70 @@ fn launchers_preserve_repository_context_and_choose_the_correct_layout() {
         .env("HERDR_BIN_PATH", &herdr)
         .env("HGG_CAPTURE", &capture)
         .env("HGG_EXIT", "1")
+        .env("HERDR_PANE_ID", "w-test:p-source")
+        .env_remove("HERDR_PLUGIN_CONTEXT_JSON")
         .output()
         .unwrap();
     assert!(!failed.status.success());
     assert!(String::from_utf8_lossy(&failed.stderr).contains("패널을 열지 못했습니다"));
+}
+
+#[test]
+fn sidebar_uses_invocation_context_even_without_or_with_stale_pane_environment() {
+    let (_temp, repo, herdr, capture) = fixture();
+    for inherited_pane in [None, Some("w-old:p-stale")] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_herdr-git-graph"));
+        command
+            .args(["--open-sidebar", "--repo"])
+            .arg(&repo)
+            .env("HERDR_BIN_PATH", &herdr)
+            .env("HGG_CAPTURE", &capture)
+            .env(
+                "HERDR_PLUGIN_CONTEXT_JSON",
+                r#"{"focused_pane_id":"w-action:p-source","workspace_id":"w-action"}"#,
+            )
+            .env_remove("HERDR_PANE_ID")
+            .env_remove("HERDR_WORKSPACE_ID")
+            .env_remove("HGG_EXIT");
+        if let Some(id) = inherited_pane {
+            command
+                .env("HERDR_PANE_ID", id)
+                .env("HERDR_WORKSPACE_ID", "w-old");
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let args = fs::read_to_string(&capture).unwrap();
+        let args: Vec<_> = args.lines().collect();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--target-pane", "w-action:p-source"])
+        );
+        assert!(!args.contains(&"--workspace"));
+    }
+}
+
+#[test]
+fn sidebar_requires_a_nonempty_target_before_launching_herdr() {
+    let (_temp, repo, herdr, capture) = fixture();
+    for context in ["{}", "invalid json", r#"{"focused_pane_id":""}"#] {
+        let output = Command::new(env!("CARGO_BIN_EXE_herdr-git-graph"))
+            .args(["--open-sidebar", "--repo"])
+            .arg(&repo)
+            .env("HERDR_BIN_PATH", &herdr)
+            .env("HGG_CAPTURE", &capture)
+            .env("HERDR_PLUGIN_CONTEXT_JSON", context)
+            .env("HERDR_PANE_ID", "")
+            .env_remove("HGG_EXIT")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("대상 패널이 없습니다"));
+        assert!(!capture.exists());
+    }
 }
 
 #[test]

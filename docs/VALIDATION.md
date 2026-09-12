@@ -14,7 +14,7 @@
 
 - `cargo fmt --check`
 - `cargo clippy --all-targets --locked -- -D warnings`
-- `cargo test --locked`: 단위 테스트 12개 + Herdr 실행 인자 통합 테스트 2개 + 실제 Git 저장소 통합 테스트 4개
+- `cargo test --locked`: 단위 테스트 12개 + Herdr 실행 인자 통합 테스트 4개 + 실제 Git 저장소 통합 테스트 4개
 - `scripts/build.sh`: 최적화한 macOS arm64 실행 파일 생성
 - 병합 그래프의 각 outgoing edge가 실제 부모 OID와 일치하는지 검증
 - 여러 부모 병합, 연결되지 않은 이력, 페이지 밖 부모, 빈 저장소, 빈 커밋 제목
@@ -45,6 +45,13 @@
 - `tests/install.py`: 운영체제별 파일 선택, 체크섬 검증, 다운로드 실패, 기존 파일 보존 등 설치 테스트 6개 통과.
 - Cargo가 없는 `PATH`를 사용해 실제 공개 GitHub 저장소에 `herdr plugin install sjlee06/herdr-git-graph --yes`를 실행하고, 이전 v0.1.0 설치가 v0.1.1로 교체되는 것 확인.
 - 설치 검증은 별도 XDG 설정·상태 폴더에서 수행했으며, 사용자 설정은 변경하지 않았습니다.
+
+## v0.2.1 사이드바 실행 수정 검증
+
+- 사용자 액션 로그에서 `split and zoomed plugin panes target an existing pane; use target_pane_id` 오류 확인. 실제 Herdr 0.9.0 서버에서도 split에 `--workspace`를 전달하면 같은 오류가 발생함을 재현.
+- split 요청에서 `--workspace`를 제거하고, 액션 컨텍스트의 `focused_pane_id`를 대상 패널로 전달. 컨텍스트가 없을 때 환경 변수로 대체하며, 둘 다 없으면 실행 전에 설명이 있는 오류를 반환.
+- 컨텍스트만 있는 백그라운드 액션, 오래된 환경 변수보다 현재 액션 컨텍스트 우선, 대상 ID 누락·빈 값·잘못된 JSON에 대한 회귀 테스트 추가.
+- `tests/herdr_live.py`: 별도 XDG 폴더와 테스트 전용 서버에서 실제 액션 호출 후 같은 탭에 그래프 전용 패널 생성, 기존 포커스 유지, 터미널 버퍼의 `GIT GRAPH` 표시, 기존 전체 보기의 새 탭 생성 검증.
 
 ## 미검증 범위
 
