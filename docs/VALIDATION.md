@@ -31,6 +31,13 @@
 
 매니페스트 검증은 별도 작업 폴더의 XDG 설정·상태 디렉터리와 비활성 플러그인 등록으로 수행했습니다.
 
+## v0.1.1 설치 수정 검증
+
+- [릴리스 워크플로](https://github.com/sjlee06/herdr-git-graph/actions/runs/34683222669): macOS·Linux 각각 arm64/x86_64의 네 환경에서 빌드, Rust 테스트, PTY·그래픽 모의 서버 테스트 통과.
+- `tests/install.py`: 운영체제별 파일 선택, 체크섬 검증, 다운로드 실패, 기존 파일 보존 등 설치 테스트 6개 통과.
+- Cargo가 없는 `PATH`를 사용해 실제 공개 GitHub 저장소에 `herdr plugin install sjlee06/herdr-git-graph --yes`를 실행하고, 이전 v0.1.0 설치가 v0.1.1로 교체되는 것 확인.
+- 설치 검증은 별도 XDG 설정·상태 폴더에서 수행했으며, 사용자 설정은 변경하지 않았습니다.
+
 ## 미검증 범위
 
 - 실제 Herdr 창과 바깥 터미널 조합에서의 픽셀 표시·스크롤 프레임률·원격 연결
