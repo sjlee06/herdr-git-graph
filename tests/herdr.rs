@@ -165,3 +165,31 @@ fn incompatible_launch_modes_are_rejected_before_opening_a_pane() {
         assert_eq!(output.status.code(), Some(2));
     }
 }
+
+#[test]
+fn theme_environment_and_cli_override_are_forwarded_to_the_new_pane() {
+    let (_temp, repo, herdr, capture) = fixture();
+    for (flags, environment, expected) in [
+        (vec![], "auto", "auto"),
+        (vec![], "terminal", "terminal"),
+        (vec!["--theme", "classic"], "terminal", "classic"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_herdr-git-graph"))
+            .args(["--open-pane", "--repo"])
+            .arg(&repo)
+            .args(flags)
+            .env("HERDR_GIT_GRAPH_THEME", environment)
+            .env("HERDR_BIN_PATH", &herdr)
+            .env("HGG_CAPTURE", &capture)
+            .env_remove("HGG_EXIT")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(
+            fs::read_to_string(&capture)
+                .unwrap()
+                .lines()
+                .any(|line| line == format!("HERDR_GIT_GRAPH_THEME={expected}"))
+        );
+    }
+}

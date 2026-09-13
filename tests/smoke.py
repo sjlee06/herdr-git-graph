@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """PTY and Herdr socket smoke tests. Python standard library only; macOS/Linux."""
 import argparse
+import atexit
+import codecs
 import fcntl
 import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import signal
 import socket
@@ -15,16 +18,31 @@ import tempfile
 import termios
 import threading
 import time
+import unicodedata
+
+
+DARK_COLORS = {"10": "dddd/eeee/ffff", "11": "1212/1818/2020",
+               "4;1": "dddd/4444/5555", "4;2": "4444/bbbb/7777",
+               "4;3": "cccc/9999/3333", "4;4": "4444/8888/cccc",
+               "4;5": "aaaa/6666/cccc", "4;6": "3333/bbbb/aaaa"}
+LIGHT_COLORS = dict(DARK_COLORS, **{"10": "2222/3333/4444", "11": "fafa/fafa/fafa"})
 
 
 class Terminal:
-    def __init__(self, binary, extra=(), env=None, size=(140, 44), demo=True):
+    def __init__(self, binary, extra=(), env=None, size=(140, 44), demo=True, colors=None):
         self.master, self.slave = pty.openpty()
         self.original = termios.tcgetattr(self.slave)
         self.output = bytearray()
+        self.screen = {}
+        self.cursor = (0, 0)
+        self.escape = ""
+        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self.colors = colors
+        self.queries = bytearray()
+        self.query_count = 0
         self.resize(*size)
         child_env = dict(os.environ, TERM="xterm-256color")
-        for key in ["HERDR_SOCKET_PATH", "HERDR_PANE_ID"]:
+        for key in ["HERDR_SOCKET_PATH", "HERDR_PANE_ID", "HERDR_GIT_GRAPH_THEME", "NO_COLOR"]:
             child_env.pop(key, None)
         child_env.update(env or {})
         self.process = subprocess.Popen(
@@ -33,7 +51,61 @@ class Terminal:
             start_new_session=True,
         )
 
+        atexit.register(self.abort)
+
+    def abort(self):
+        if self.process.poll() is None:
+            self.process.kill()
+            self.process.wait()
+
+    def screen_text(self):
+        # Reconstruct cells, because Ratatui can skip unchanged/default spaces
+        # and emit cursor movements in the middle of a visible phrase.
+        return "\n".join("".join(self.screen.get((row, col), " ")
+                                  for col in range(self.size[0]))
+                         for row in range(self.size[1]))
+
+    def record_screen(self, chunk):
+        for char in self.decoder.decode(chunk):
+            if self.escape:
+                self.escape += char
+                if self.escape.startswith("\x1b]"):
+                    if char == "\x07" or self.escape.endswith("\x1b\\"):
+                        self.escape = ""
+                    continue
+                if len(self.escape) == 2 and char == "[":
+                    continue
+                if self.escape.startswith("\x1b["):
+                    if not ("@" <= char <= "~"):
+                        continue
+                    args = self.escape[2:-1]
+                    row, col = self.cursor
+                    if char in "Hf":
+                        coords = [int(n or 1) for n in args.split(";")]
+                        row, col = (coords + [1])[:2]
+                        self.cursor = (row - 1, col - 1)
+                    elif char == "J" and args in ["2", "3"]:
+                        self.screen.clear()
+                    elif char == "K":
+                        for x in range(col, self.size[0]):
+                            self.screen.pop((row, x), None)
+                self.escape = ""
+            elif char == "\x1b":
+                self.escape = char
+            elif char == "\r":
+                self.cursor = (self.cursor[0], 0)
+            elif char == "\n":
+                self.cursor = (self.cursor[0] + 1, self.cursor[1])
+            elif char >= " " and not unicodedata.combining(char):
+                row, col = self.cursor
+                self.screen[(row, col)] = char
+                width = 2 if unicodedata.east_asian_width(char) in "WF" else 1
+                for offset in range(1, width):
+                    self.screen[(row, col + offset)] = ""
+                self.cursor = (row, col + width)
+
     def resize(self, width, height):
+        self.size = (width, height)
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack("HHHH", height, width, 0, 0))
         if hasattr(self, "process"):
             os.kill(self.process.pid, signal.SIGWINCH)
@@ -48,6 +120,20 @@ class Terminal:
                     if not chunk:
                         break
                     self.output.extend(chunk)
+                    self.record_screen(chunk)
+                    self.queries.extend(chunk)
+                    # Emulate the terminal, independently of the app's socket mock.
+                    pattern = rb"\x1b\](10|11|4;[1-6]);\?\x1b\\"
+                    matches = list(re.finditer(pattern, self.queries))
+                    for match in matches:
+                        self.query_count += 1
+                        command = match[1].decode()
+                        if self.colors is not None and command in self.colors:
+                            reply = f"\x1b]{command};rgb:{self.colors[command]}\x1b\\"
+                            os.write(self.master, reply.encode())
+                    if matches:
+                        del self.queries[:matches[-1].end()]
+                    self.queries = self.queries[-64:]
                 except OSError:
                     break
 
@@ -188,6 +274,43 @@ def main():
     assert b"BRANCHES" not in terminal.output
     print("PASS: narrow sidebar, search, graph-only focus, mouse, resize, cleanup")
 
+    for colors in [DARK_COLORS, LIGHT_COLORS]:
+        terminal = Terminal(binary, ["--renderer", "text"], colors=colors)
+        terminal.ready()
+        terminal.pump(0.3)
+        assert terminal.query_count == 8, terminal.query_count
+        # Cyan is the first graph lane and is copied verbatim from OSC 4.
+        assert b"38;2;51;187;170" in terminal.output
+        assert b"48;2;12;17;24" not in terminal.output, "Fixed background leaked into auto theme"
+        terminal.send("/themeprobe")
+        # Late replies, BEL/ST terminators and fragmented framing must not become search text.
+        for fragment in ["\x1b", "]11;rgb:", colors["11"], "\x07",
+                         "\x1b]4;6;rgb:3333/bbbb/aaaa", "\x1b", "\\"]:
+            os.write(terminal.master, fragment.encode())
+            terminal.pump(0.01)
+        terminal.send("\r")
+        terminal.send("r")
+        assert terminal.query_count == 16
+        terminal.finish()
+        assert b"rgb:" not in terminal.output, "Color reply leaked into search"
+    print("PASS: light/dark OSC colors, inherited background, late/fragmented replies, theme refresh")
+
+    terminal = Terminal(binary, ["--renderer", "curves"])
+    terminal.ready()
+    terminal.pump(0.9)
+    assert "terminal palette unavailable" in terminal.screen_text()
+    terminal.send("j")
+    terminal.finish()
+    print("PASS: unanswered queries keep UI responsive with native colors and text fallback")
+
+    for mode in ["terminal", "classic"]:
+        terminal = Terminal(binary, ["--theme", mode, "--renderer", "text"])
+        terminal.ready()
+        terminal.finish()
+        assert terminal.query_count == 0
+        assert (b"48;2;12;17;24" in terminal.output) == (mode == "classic")
+    print("PASS: query-free terminal mode and classic theme opt-out")
+
     with tempfile.TemporaryDirectory(prefix="live-", dir=args.work) as temporary:
         repo = Path(temporary)
         def git(*arguments):
@@ -204,9 +327,9 @@ def main():
 
         def wait_for(text):
             deadline = time.monotonic() + 6
-            while text not in terminal.output and time.monotonic() < deadline:
+            while text.decode() not in terminal.screen_text() and time.monotonic() < deadline:
                 terminal.pump(0.1)
-            assert text in terminal.output, repr(bytes(terminal.output)[-4000:])
+            assert text.decode() in terminal.screen_text(), terminal.screen_text()
 
         tracked.write_text("AAAAAAAAAAAA\n")
         wait_for(b"Uncommitted changes")
@@ -229,7 +352,7 @@ def main():
         terminal.ready()
         tracked.write_text("manual only\n")
         terminal.pump(1.8)
-        assert b"Uncommitted changes" not in terminal.output
+        assert "Uncommitted changes" not in terminal.screen_text()
         terminal.send("r")
         wait_for(b"Uncommitted changes")
         terminal.finish()
@@ -238,9 +361,14 @@ def main():
     with tempfile.TemporaryDirectory(prefix="rpc-", dir=args.work) as temporary:
         # UNIX socket paths have a small platform-specific maximum length.
         mock = MockHerdr(Path(temporary) / "s")
-        terminal = Terminal(binary, ["--renderer", "curves"], {"HERDR_SOCKET_PATH": str(mock.path), "HERDR_PANE_ID": "w-test:p-test"})
+        terminal = Terminal(binary, ["--renderer", "curves"], {"HERDR_SOCKET_PATH": str(mock.path), "HERDR_PANE_ID": "w-test:p-test"}, colors=DARK_COLORS)
         terminal.ready()
         terminal.pump(0.2)
+        previous_frame = mock.frames[-1][1]
+        terminal.colors = dict(LIGHT_COLORS, **{"4;6": "2222/8888/9999"})
+        terminal.send("r")
+        terminal.pump(0.3)
+        assert mock.frames[-1][1] != previous_frame, "Theme change must invalidate cached curves"
         terminal.send("j")
         terminal.send("?")
         terminal.send("\x1b")
@@ -257,7 +385,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="rpc-", dir=args.work) as temporary:
         mock = MockHerdr(Path(temporary) / "s")
         terminal = Terminal(binary, ["--sidebar", "--renderer", "curves"],
-                            {"HERDR_SOCKET_PATH": str(mock.path), "HERDR_PANE_ID": "w-test:p-test"}, size=(40, 24))
+                            {"HERDR_SOCKET_PATH": str(mock.path), "HERDR_PANE_ID": "w-test:p-test"}, size=(40, 24), colors=LIGHT_COLORS)
         terminal.ready()
         terminal.pump(0.2)
         terminal.send("jl")
@@ -275,11 +403,12 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="rpc-", dir=args.work) as temporary:
         mock = MockHerdr(Path(temporary) / "s", fail=True)
-        terminal = Terminal(binary, ["--renderer", "curves"], {"HERDR_SOCKET_PATH": str(mock.path), "HERDR_PANE_ID": "w-test:p-test"})
+        terminal = Terminal(binary, ["--renderer", "curves"], {"HERDR_SOCKET_PATH": str(mock.path), "HERDR_PANE_ID": "w-test:p-test"}, colors=DARK_COLORS)
         terminal.ready()
+        terminal.pump(0.3)
+        assert "Text fallback" in terminal.screen_text()
         terminal.finish()
         mock.close()
-        assert b"Text fallback" in terminal.output
         assert not mock.frames
         assert not mock.errors, mock.errors
         print("PASS: disabled graphics falls back to text")

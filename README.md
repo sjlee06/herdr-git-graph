@@ -22,6 +22,7 @@ A read-only Git graph viewer built with Rust and Ratatui. Browse local and remot
 - **Live updates** — background checks every 2 seconds reflect local file, commit, and branch changes while preserving selection and scroll position.
 - **Search and navigation** — find a message, author, ref, or hash; navigate with the keyboard or mouse.
 - **Smooth curves with a text fallback** — antialiased Bézier connections through Herdr's graphics API, plus a Unicode renderer for ordinary terminals.
+- **Terminal theme integration** — uses the current foreground/background and ANSI palette, with transparent curve backgrounds and light/dark support. `--theme classic` restores the original look. See [theme behavior and fallbacks](docs/USAGE.md#terminal-theme).
 
 ## Install
 

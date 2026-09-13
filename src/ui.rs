@@ -1,7 +1,7 @@
 use crate::{
     app::{App, Focus},
-    graph::PALETTE,
     graphics::Viewport,
+    theme::Theme,
 };
 use ratatui::{
     Frame, Terminal,
@@ -12,16 +12,6 @@ use ratatui::{
     widgets::{Block, BorderType, Clear, Paragraph},
 };
 use std::{fmt::Write, path::Path};
-
-pub const BG_RGB: (u8, u8, u8) = (12, 17, 24);
-pub const SELECT_RGB: (u8, u8, u8) = (28, 46, 59);
-const BG: Color = Color::Rgb(12, 17, 24);
-const PANEL: Color = Color::Rgb(15, 22, 31);
-const FG: Color = Color::Rgb(219, 229, 239);
-const MUTED: Color = Color::Rgb(117, 137, 158);
-const BORDER: Color = Color::Rgb(40, 55, 70);
-const ACCENT: Color = Color::Rgb(94, 234, 212);
-const SELECT: Color = Color::Rgb(28, 46, 59);
 
 pub fn clean(s: &str) -> String {
     s.chars()
@@ -37,24 +27,31 @@ pub fn clean(s: &str) -> String {
         .collect()
 }
 
-fn color(index: usize) -> Color {
-    let (r, g, b) = PALETTE[index % PALETTE.len()];
-    Color::Rgb(r, g, b)
-}
-
-fn block(title: &str, focused: bool) -> Block<'_> {
+fn block(theme: Theme, title: &str, focused: bool) -> Block<'_> {
     Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(if focused { ACCENT } else { BORDER }))
+        .border_style(Style::default().fg(if focused {
+            theme.accent()
+        } else {
+            theme.border()
+        }))
         .title(Span::styled(
             format!(" {title} "),
-            Style::default().fg(if focused { ACCENT } else { MUTED }),
+            Style::default().fg(if focused {
+                theme.accent()
+            } else {
+                theme.muted().fg.unwrap_or(Color::Reset)
+            }),
         ))
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App, smooth: bool) -> Option<Viewport> {
+    let theme = app.theme;
     let area = frame.area();
-    frame.render_widget(Block::default().style(Style::default().bg(BG).fg(FG)), area);
+    frame.render_widget(
+        Block::default().style(Style::default().bg(theme.bg()).fg(theme.fg())),
+        area,
+    );
     app.history_area = Rect::default();
     app.branches_area = Rect::default();
     app.detail_area = Rect::default();
@@ -64,7 +61,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, smooth: bool) -> Option<Viewport> 
             Paragraph::new(format!(
                 "Herdr Git Graph\n\nEnlarge to {min_width} × {min_height}.\nPress q to close."
             ))
-            .style(Style::default().fg(ACCENT)),
+            .style(Style::default().fg(theme.accent())),
             area,
         );
         return None;
@@ -89,11 +86,11 @@ pub fn draw(frame: &mut Frame, app: &mut App, smooth: bool) -> Option<Viewport> 
     };
     let toolbar = Layout::horizontal([Constraint::Min(20), Constraint::Length(28)]).split(rows[1]);
     frame.render_widget(
-        Paragraph::new(query).style(Style::default().fg(if app.searching {
-            ACCENT
+        Paragraph::new(query).style(if app.searching {
+            Style::default().fg(theme.accent())
         } else {
-            MUTED
-        })),
+            theme.muted()
+        }),
         toolbar[0],
     );
     frame.render_widget(
@@ -107,7 +104,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, smooth: bool) -> Option<Viewport> 
             app.repo.commit_count()
         ))
         .right_aligned()
-        .style(Style::default().fg(MUTED)),
+        .style(theme.muted()),
         toolbar[1],
     );
 
@@ -149,8 +146,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, smooth: bool) -> Option<Viewport> 
         let help = "\n  Tab / Shift-Tab    Move between panels\n  ↑ ↓  /  j k         Select commit or branch\n  Enter               Open details / apply branch filter\n  PgUp / PgDn         Move one page\n  Home / End  ·  g G   First / last item\n  h / l               Pan graph / scroll diff horizontally\n  /                   Search loaded history\n  n / N               Next / previous search match\n  a                   Show all refs\n  r                   Reload local repository\n  d                   Toggle details\n  Mouse               Click to select · wheel to scroll\n  q / Ctrl-C          Quit\n\n  Search highlights history without removing graph nodes.\n  Esc or ? closes this help.";
         frame.render_widget(
             Paragraph::new(help)
-                .style(Style::default().fg(FG).bg(PANEL))
-                .block(block("Keyboard shortcuts", true)),
+                .style(Style::default().fg(theme.fg()).bg(theme.panel()))
+                .block(block(theme, "Keyboard shortcuts", true)),
             modal,
         );
         return None;
@@ -159,6 +156,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, smooth: bool) -> Option<Viewport> 
 }
 
 fn sidebar(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option<Viewport> {
+    let theme = app.theme;
     if app.help {
         frame.render_widget(
             Paragraph::new(
@@ -174,8 +172,8 @@ fn sidebar(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
                 .map(Line::from)
                 .collect::<Vec<_>>(),
             )
-            .style(Style::default().fg(FG).bg(PANEL))
-            .block(block("Help", true)),
+            .style(Style::default().fg(theme.fg()).bg(theme.panel()))
+            .block(block(theme, "Help", true)),
             area,
         );
         return None;
@@ -196,14 +194,14 @@ fn sidebar(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
         Paragraph::new(vec![
             Line::styled(
                 format!(" {}", clean(&name)),
-                Style::default().fg(FG).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
             ),
             Line::styled(
                 format!(" {}", clean(&app.repo.head)),
-                Style::default().fg(ACCENT),
+                Style::default().fg(theme.accent()),
             ),
         ])
-        .style(Style::default().bg(PANEL)),
+        .style(Style::default().bg(theme.panel())),
         rows[0],
     );
     let view = history(frame, app, rows[1], smooth);
@@ -227,14 +225,14 @@ fn sidebar(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
     };
     frame.render_widget(
         Paragraph::new(vec![
-            Line::styled(status, Style::default().fg(MUTED)),
+            Line::styled(status, theme.muted()),
             Line::styled(
                 if app.searching {
                     "Enter apply · Esc clear"
                 } else {
                     "↑↓ move / find ? help q"
                 },
-                Style::default().fg(ACCENT).bg(PANEL),
+                Style::default().fg(theme.accent()).bg(theme.panel()),
             ),
         ]),
         rows[2],
@@ -243,6 +241,7 @@ fn sidebar(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
 }
 
 fn header(frame: &mut Frame, app: &App, area: Rect) {
+    let theme = app.theme;
     let name = app
         .repo
         .root
@@ -251,27 +250,31 @@ fn header(frame: &mut Frame, app: &App, area: Rect) {
         .unwrap_or_else(|| app.repo.root.display().to_string());
     let lines = vec![
         Line::from(vec![
-            Span::styled("  ◈  ", Style::default().fg(ACCENT)),
-            Span::styled("HERDR ", Style::default().fg(MUTED)),
+            Span::styled("  ◈  ", Style::default().fg(theme.accent())),
+            Span::styled("HERDR ", theme.muted()),
             Span::styled(
                 "GIT GRAPH",
-                Style::default().fg(FG).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
-            Span::styled(format!("     {}", clean(&name)), Style::default().fg(FG)),
-            Span::styled("  /  ", Style::default().fg(BORDER)),
-            Span::styled(clean(&app.repo.head), Style::default().fg(ACCENT)),
+            Span::styled(
+                format!("     {}", clean(&name)),
+                Style::default().fg(theme.fg()),
+            ),
+            Span::styled("  /  ", Style::default().fg(theme.border())),
+            Span::styled(clean(&app.repo.head), Style::default().fg(theme.accent())),
         ]),
     ];
     frame.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(PANEL)),
+        Paragraph::new(lines).style(Style::default().bg(theme.panel())),
         area,
     );
 }
 
 fn branches(frame: &mut Frame, app: &mut App, area: Rect) {
-    let b = block("BRANCHES", app.focus == Focus::Branches);
+    let theme = app.theme;
+    let b = block(theme, "BRANCHES", app.focus == Focus::Branches);
     let inner = b.inner(area);
     frame.render_widget(b, area);
     let available = usize::from(inner.height.saturating_sub(3));
@@ -292,11 +295,22 @@ fn branches(frame: &mut Frame, app: &mut App, area: Rect) {
         Line::from(vec![
             Span::styled(
                 if active { " ● " } else { "   " },
-                Style::default().fg(ACCENT),
+                Style::default().fg(theme.accent()),
             ),
-            Span::styled(name, Style::default().fg(if selected { FG } else { MUTED })),
+            Span::styled(
+                name,
+                if selected {
+                    theme.selected_text().fg(theme.fg())
+                } else {
+                    theme.muted()
+                },
+            ),
         ])
-        .style(Style::default().bg(if selected { SELECT } else { BG }))
+        .style(Style::default().bg(if selected {
+            theme.selection()
+        } else {
+            theme.bg()
+        }))
     };
     let mut lines = vec![row(
         "All branches".into(),
@@ -332,14 +346,16 @@ fn branches(frame: &mut Frame, app: &mut App, area: Rect) {
                     " Local history · r to reload"
                 }),
             ])
-            .style(Style::default().fg(MUTED)),
+            .style(theme.muted()),
             foot,
         );
     }
 }
 
 fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option<Viewport> {
+    let theme = app.theme;
     let b = block(
+        theme,
         if app.sidebar && app.loading {
             "GIT GRAPH · loading…"
         } else if app.sidebar {
@@ -386,16 +402,16 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
     if !app.sidebar {
         let col_header = Rect::new(inner.x, inner.y, inner.width, 1);
         frame.render_widget(
-            Paragraph::new(" GRAPH").style(Style::default().fg(MUTED).bg(PANEL)),
+            Paragraph::new(" GRAPH").style(theme.muted().bg(theme.panel())),
             col_header,
         );
         frame.render_widget(
-            Paragraph::new("COMMIT / DESCRIPTION").style(Style::default().fg(MUTED).bg(PANEL)),
+            Paragraph::new("COMMIT / DESCRIPTION").style(theme.muted().bg(theme.panel())),
             Rect::new(cols[1].x, inner.y, cols[1].width, 1),
         );
         if cols[2].width > 0 {
             frame.render_widget(
-                Paragraph::new("AUTHOR · DATE").style(Style::default().fg(MUTED).bg(PANEL)),
+                Paragraph::new("AUTHOR · DATE").style(theme.muted().bg(theme.panel())),
                 Rect::new(cols[2].x, inner.y, cols[2].width, 1),
             );
         }
@@ -407,7 +423,7 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
             } else {
                 "\n No commits or changes yet.\n Make a change, then press r."
             })
-            .style(Style::default().fg(MUTED)),
+            .style(theme.muted()),
             body,
         );
         return None;
@@ -425,7 +441,11 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
             break;
         }
         let selected = app.selected == i;
-        let bg = if selected { SELECT } else { BG };
+        let bg = if selected {
+            theme.selection()
+        } else {
+            theme.bg()
+        };
         frame.render_widget(
             Block::default().style(Style::default().bg(bg)),
             Rect::new(body.x, y, body.width, 1),
@@ -443,21 +463,21 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
         if !app.sidebar {
             spans.push(Span::styled(
                 format!("{short}  "),
-                Style::default().fg(color(app.graph.rows[i].color)),
+                Style::default().fg(theme.lane(app.graph.rows[i].color)),
             ));
         }
         spans.push(Span::styled(
             clean(&commit.subject),
             Style::default()
                 .fg(if is_match {
-                    Color::Rgb(251, 191, 106)
+                    theme.highlight()
                 } else {
-                    FG
+                    theme.fg()
                 })
-                .add_modifier(if selected {
-                    Modifier::BOLD
+                .patch(if selected {
+                    theme.selected_text()
                 } else {
-                    Modifier::empty()
+                    Style::default()
                 }),
         ));
         let line = Line::from(spans);
@@ -468,14 +488,11 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
         if y + 1 < body.bottom() {
             let mut refs = Vec::new();
             if app.sidebar {
-                refs.push(Span::styled(
-                    format!("{short} "),
-                    Style::default().fg(MUTED),
-                ));
+                refs.push(Span::styled(format!("{short} "), theme.muted()));
             }
             refs.push(Span::styled(
                 clean(&commit.refs),
-                Style::default().fg(ACCENT),
+                Style::default().fg(theme.accent()),
             ));
             frame.render_widget(
                 Paragraph::new(Line::from(refs)),
@@ -484,22 +501,29 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
         }
         if cols[2].width > 0 {
             frame.render_widget(
-                Paragraph::new(clean(&commit.author)).style(Style::default().fg(if selected {
-                    FG
+                Paragraph::new(clean(&commit.author)).style(if selected {
+                    Style::default().fg(theme.fg())
                 } else {
-                    MUTED
-                })),
+                    theme.muted()
+                }),
                 Rect::new(cols[2].x, y, cols[2].width, 1),
             );
             if y + 1 < body.bottom() {
                 frame.render_widget(
-                    Paragraph::new(commit.date.clone()).style(Style::default().fg(MUTED)),
+                    Paragraph::new(commit.date.clone()).style(theme.muted()),
                     Rect::new(cols[2].x, y + 1, cols[2].width, 1),
                 );
             }
         }
         if !smooth {
-            text_graph(frame, &app.graph.rows[i], cols[0], y, app.graph_offset);
+            text_graph(
+                frame,
+                theme,
+                &app.graph.rows[i],
+                cols[0],
+                y,
+                app.graph_offset,
+            );
         }
     }
     Some(Viewport {
@@ -510,7 +534,14 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
     })
 }
 
-fn text_graph(frame: &mut Frame, row: &crate::graph::Row, area: Rect, y: u16, offset: usize) {
+fn text_graph(
+    frame: &mut Frame,
+    theme: Theme,
+    row: &crate::graph::Row,
+    area: Rect,
+    y: u16,
+    offset: usize,
+) {
     let mut put = |column: usize, line: u16, symbol: &str, c: usize, crossing: bool| {
         let x = i32::from(area.x) + column as i32 - offset as i32;
         if x >= i32::from(area.x)
@@ -526,7 +557,7 @@ fn text_graph(frame: &mut Frame, row: &crate::graph::Row, area: Rect, y: u16, of
             } else {
                 symbol
             };
-            cell.set_symbol(symbol).set_fg(color(c));
+            cell.set_symbol(symbol).set_fg(theme.lane(c));
         }
     };
     for (i, lane) in row.above.iter().enumerate() {
@@ -557,7 +588,9 @@ fn text_graph(frame: &mut Frame, row: &crate::graph::Row, area: Rect, y: u16, of
 }
 
 fn details(frame: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
     let b = block(
+        theme,
         if app.selected_oid() == Some(crate::git::WORKTREE_OID) {
             "WORKING TREE"
         } else {
@@ -575,15 +608,15 @@ fn details(frame: &mut Frame, app: &mut App, area: Rect) {
         .take(usize::from(inner.height))
         .map(|line| {
             let fg = if line.starts_with('+') && !line.starts_with("+++") {
-                Color::Rgb(163, 230, 153)
+                theme.added()
             } else if line.starts_with('-') && !line.starts_with("---") {
-                Color::Rgb(251, 113, 133)
+                theme.removed()
             } else if line.starts_with("@@") {
-                Color::Rgb(167, 139, 250)
+                theme.hunk()
             } else if line.starts_with("commit ") || line.starts_with("diff ") {
-                ACCENT
+                theme.accent()
             } else {
-                MUTED
+                theme.muted().fg.unwrap_or(Color::Reset)
             };
             Line::styled(clean(line), Style::default().fg(fg))
         })
@@ -595,6 +628,7 @@ fn details(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn footer(frame: &mut Frame, app: &App, area: Rect) {
+    let theme = app.theme;
     let range = if app.repo.commits.is_empty() {
         "0 / 0".into()
     } else {
@@ -612,13 +646,13 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(area);
     let cols = Layout::horizontal([Constraint::Min(10), Constraint::Length(32)]).split(rows[0]);
     frame.render_widget(
-        Paragraph::new(format!(" {}", clean(&app.status))).style(Style::default().fg(MUTED)),
+        Paragraph::new(format!(" {}", clean(&app.status))).style(theme.muted()),
         cols[0],
     );
     frame.render_widget(
         Paragraph::new(format!("{range} "))
             .right_aligned()
-            .style(Style::default().fg(MUTED)),
+            .style(theme.muted()),
         cols[1],
     );
     let keys = if app.searching {
@@ -627,7 +661,7 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
         " Tab panels   ↑↓ navigate   / search   a all   r reload   d details   ? help   q quit"
     };
     frame.render_widget(
-        Paragraph::new(keys).style(Style::default().bg(PANEL).fg(ACCENT)),
+        Paragraph::new(keys).style(Style::default().bg(theme.panel()).fg(theme.accent())),
         rows[1],
     );
 }
@@ -640,6 +674,8 @@ pub fn snapshot(
     smooth: bool,
 ) -> anyhow::Result<()> {
     use base64::Engine;
+    let theme = app.theme;
+    let (r, g, b) = theme.export_rgb(theme.bg(), true);
     let mut terminal = Terminal::new(TestBackend::new(width, height))?;
     let mut viewport = None;
     terminal.draw(|frame| {
@@ -647,7 +683,7 @@ pub fn snapshot(
     })?;
     let buffer = terminal.backend().buffer();
     let mut svg = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\"><rect width=\"100%\" height=\"100%\" fill=\"#0c1118\"/><g font-family=\"Menlo, 'DejaVu Sans Mono', monospace\" font-size=\"14\">",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\"><rect width=\"100%\" height=\"100%\" fill=\"#{r:02x}{g:02x}{b:02x}\"/><g font-family=\"Menlo, 'DejaVu Sans Mono', monospace\" font-size=\"14\">",
         u32::from(width) * 9,
         u32::from(height) * 20,
         u32::from(width) * 9,
@@ -656,7 +692,14 @@ pub fn snapshot(
     for y in 0..height {
         for x in 0..width {
             let cell = &buffer[(x, y)];
-            if let Color::Rgb(r, g, b) = cell.bg {
+            {
+                let color = if cell.modifier.contains(Modifier::REVERSED) {
+                    cell.fg
+                } else {
+                    cell.bg
+                };
+                let (r, g, b) =
+                    theme.export_rgb(color, !cell.modifier.contains(Modifier::REVERSED));
                 write!(
                     svg,
                     "<rect x=\"{}\" y=\"{}\" width=\"9\" height=\"20\" fill=\"#{r:02x}{g:02x}{b:02x}\"/>",
@@ -670,11 +713,8 @@ pub fn snapshot(
             if cell.symbol().trim().is_empty() {
                 continue;
             }
-            let (r, g, b) = if let Color::Rgb(r, g, b) = cell.fg {
-                (r, g, b)
-            } else {
-                (219, 229, 239)
-            };
+            let reversed = cell.modifier.contains(Modifier::REVERSED);
+            let (r, g, b) = theme.export_rgb(if reversed { cell.bg } else { cell.fg }, reversed);
             write!(
                 svg,
                 "<text x=\"{}\" y=\"{}\" fill=\"#{r:02x}{g:02x}{b:02x}\"{}>{}</text>",
@@ -691,7 +731,7 @@ pub fn snapshot(
     }
     svg.push_str("</g>");
     if smooth && let Some(view) = viewport {
-        let png = crate::graphics::rasterize(&app.graph, view, (9, 20))?.encode_png()?;
+        let png = crate::graphics::rasterize(&app.graph, view, (9, 20), theme)?.encode_png()?;
         let encoded = base64::engine::general_purpose::STANDARD.encode(png);
         write!(
             svg,
@@ -717,6 +757,34 @@ fn xml(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_theme_keeps_panel_defaults_and_a_visible_selection_without_queries() {
+        for sidebar in [false, true] {
+            let mut app = App::new(crate::git::demo(), 2000, true).with_sidebar(sidebar);
+            let mut terminal = Terminal::new(TestBackend::new(140, 44)).unwrap();
+            terminal
+                .draw(|frame| {
+                    draw(frame, &mut app, false);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            assert!(buffer.content.iter().all(|cell| cell.bg == Color::Reset));
+            assert!(
+                buffer
+                    .content
+                    .iter()
+                    .any(|cell| cell.modifier.contains(Modifier::REVERSED))
+            );
+            assert!(
+                buffer
+                    .content
+                    .iter()
+                    .any(|cell| cell.fg == Color::Indexed(6))
+            );
+        }
+    }
+
     #[test]
     fn sidebar_renders_narrow_history_without_hidden_panels() {
         for (width, height) in [(24, 8), (32, 12), (48, 30), (140, 44)] {

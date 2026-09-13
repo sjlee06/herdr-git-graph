@@ -17,6 +17,8 @@ The build script runs `cargo build --release --locked` and copies the executable
 
 After changing Rust code, rebuild and reopen the viewer. If you change the manifest, relink the plugin so Herdr reads it again.
 
+For faster local builds with debug symbols, use `sh scripts/build.sh --debug`. This builds `target/debug/herdr-git-graph` and atomically replaces `bin/herdr-git-graph`, so an already-open viewer can keep running until you close it. Running panes continue using the old executable until reopened. The default build remains `--release`.
+
 ```bash
 ./bin/herdr-git-graph --demo
 ./bin/herdr-git-graph --demo --sidebar
@@ -24,6 +26,47 @@ After changing Rust code, rebuild and reopen the viewer. If you change the manif
 ```
 
 `--demo` uses built-in sample data. `--check` summarizes the repository without opening a TUI. On macOS, `Demo.command` opens the sample view, downloading the matching release first if the executable is missing.
+
+## main 푸시 전 로컬 디버깅
+
+Rust/Cargo가 `PATH`에 있어야 소스를 다시 빌드할 수 있습니다. 아직 없다면 [rustup](https://rustup.rs/)으로 설치하고 새 셸을 여세요. 빌드된 `bin/herdr-git-graph` 실행에는 Rust가 필요하지 않습니다.
+
+```bash
+# 저장소 루트에서 빠르게 빌드
+sh scripts/build.sh --debug
+
+# 일반 터미널: 현재 테마, 실제 저장소, 사이드바 확인
+RUST_BACKTRACE=1 ./bin/herdr-git-graph --repo .
+RUST_BACKTRACE=1 ./bin/herdr-git-graph --repo . --sidebar
+
+# 데모로 기존 테마와 비교
+./bin/herdr-git-graph --demo --theme classic
+./bin/herdr-git-graph --demo --theme auto
+```
+
+실제 Herdr 탭·사이드바와 곡선은 **Herdr 안의 터미널**에서 확인합니다. 아래 `link`는 동일 ID 플러그인의 실행 경로를 이 로컬 폴더로 바꿉니다. `install`은 릴리스 실행 파일을 다운로드하므로 로컬 코드 확인에는 `link`를 사용하세요. `link` 자체는 빌드를 실행하지 않습니다.
+
+```bash
+herdr plugin link .
+herdr plugin action invoke herdr.git-graph.open
+herdr plugin action invoke herdr.git-graph.sidebar
+
+# 열리지 않으면 액션 실행 로그 확인
+herdr plugin log list --plugin herdr.git-graph
+```
+
+코드를 수정할 때마다 `sh scripts/build.sh --debug`로 다시 빌드하고, 그래프에서 `q`로 닫은 뒤 다시 여세요. `r`은 Git 데이터와 터미널 색상을 다시 조회하며 실행 파일을 교체하지는 않습니다. manifest를 수정했을 때는 `herdr plugin link .`도 다시 실행합니다.
+
+배포된 릴리스로 돌아가려면 열린 그래프를 `q`로 닫고, 로컬 링크를 먼저 해제한 뒤 설치하세요. 링크된 상태에서 GitHub 설치를 실행하면 `already linked from a local path` 오류가 발생합니다.
+
+```bash
+herdr plugin unlink herdr.git-graph
+herdr plugin install sjlee06/herdr-git-graph
+```
+
+터미널을 밝은 테마와 어두운 테마로 각각 바꾸고 그래프에서 `r`을 누르세요. 일반 행 배경이 옆 패널과 이어지는지, 선택 행이 보이는지, 곡선 배경에 검은 사각형이 없는지 확인합니다. `/` 검색·한글 입력·방향키·마우스·창 크기 변경·`q` 종료도 확인하세요. `--theme terminal`은 색상 조회 없는 대체 경로를 확인하는 옵션이며 문자 그래프를 사용합니다.
+
+개인 Herdr 세션에 플러그인을 연결하지 않고 실제 실행 경로만 검증하려면 빌드 후 `python3 tests/herdr_live.py`를 실행하세요. 테스트가 별도 세션과 임시 설정을 만들고 정리합니다. 실제 바깥 터미널에서 보이는 색상·투명도·곡선의 육안 확인은 위 수동 확인이 필요합니다.
 
 ## Checks
 
@@ -64,6 +107,8 @@ The README's `docs/preview.png` is a rasterized copy of `preview.svg` for consis
 | `src/graph.rs` | Lane assignment from parent commit IDs |
 | `src/ui.rs` | Ratatui panels, Unicode graph, SVG snapshots |
 | `src/graphics.rs` | tiny-skia curves and Herdr PNG streams |
+| `src/theme.rs` | Native/classic styles, OSC color parsing, shared RGB palette |
+| `src/theme_probe.rs` | Asynchronous terminal queries and color-reply filtering |
 | `src/herdr.rs` | Repository context, plugin action, socket requests |
 | `tests/repository.rs` | Integration tests using temporary Git repositories |
 | `tests/herdr.rs` | Tab/sidebar launch arguments, repository context, CLI errors |

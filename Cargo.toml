@@ -1,6 +1,6 @@
 [package]
 name = "herdr-git-graph"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "Interactive Git commit and branch graph for Herdr"
 license = "MIT"
@@ -9,7 +9,7 @@ repository = "https://github.com/sjlee06/herdr-git-graph"
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 crossterm = "0.29"
 ratatui = "0.30"
 serde_json = "1"

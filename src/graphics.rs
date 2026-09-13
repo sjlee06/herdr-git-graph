@@ -1,6 +1,6 @@
 use crate::{
-    graph::{Graph, PALETTE},
-    ui::{BG_RGB, SELECT_RGB},
+    graph::Graph,
+    theme::{CLASSIC_BG, Theme, ThemeMode},
 };
 use anyhow::{Context, Result};
 use ratatui::layout::Rect;
@@ -14,7 +14,7 @@ pub struct Viewport {
     pub column_offset: usize,
 }
 
-pub fn rasterize(graph: &Graph, view: Viewport, cell: (u32, u32)) -> Result<Pixmap> {
+pub fn rasterize(graph: &Graph, view: Viewport, cell: (u32, u32), theme: Theme) -> Result<Pixmap> {
     let width = u32::from(view.area.width)
         .checked_mul(cell.0)
         .context("Image width overflow")?;
@@ -26,7 +26,14 @@ pub fn rasterize(graph: &Graph, view: Viewport, cell: (u32, u32)) -> Result<Pixm
         "Graph viewport exceeds 8 megapixels"
     );
     let mut pixmap = Pixmap::new(width, height).context("Empty graph viewport")?;
-    pixmap.fill(Color::from_rgba8(BG_RGB.0, BG_RGB.1, BG_RGB.2, 255));
+    if theme.mode == ThemeMode::Classic {
+        pixmap.fill(Color::from_rgba8(
+            CLASSIC_BG.0,
+            CLASSIC_BG.1,
+            CLASSIC_BG.2,
+            255,
+        ));
+    }
     let cw = cell.0 as f32;
     let ch = cell.1 as f32;
     let x = |column: usize| (column as f32 * 3.0 + 1.5 - view.column_offset as f32) * cw;
@@ -34,10 +41,12 @@ pub fn rasterize(graph: &Graph, view: Viewport, cell: (u32, u32)) -> Result<Pixm
     let mut nodes = Vec::new();
     for (index, row) in graph.rows.iter().enumerate().skip(view.top).take(visible) {
         let y = ((index - view.top) * 2) as f32 * ch;
-        if index == view.selected {
+        if index == view.selected
+            && let Some(bg) = theme.selection_rgb()
+        {
             let rect = tiny_skia::Rect::from_xywh(0.0, y, width as f32, ch).unwrap();
             let mut paint = Paint::default();
-            paint.set_color_rgba8(SELECT_RGB.0, SELECT_RGB.1, SELECT_RGB.2, 255);
+            paint.set_color_rgba8(bg.0, bg.1, bg.2, 255);
             pixmap.fill_rect(rect, &paint, Transform::identity(), None);
         }
         for (column, lane) in row.above.iter().enumerate() {
@@ -45,7 +54,7 @@ pub fn rasterize(graph: &Graph, view: Viewport, cell: (u32, u32)) -> Result<Pixm
                 let mut path = PathBuilder::new();
                 path.move_to(x(column), y);
                 path.line_to(x(column), y + 0.5 * ch);
-                stroke(&mut pixmap, path, lane.color, cw);
+                stroke(&mut pixmap, path, theme.lane_rgb(lane.color), cw);
             }
         }
         for edge in &row.edges {
@@ -63,7 +72,7 @@ pub fn rasterize(graph: &Graph, view: Viewport, cell: (u32, u32)) -> Result<Pixm
                     y + 2.0 * ch,
                 );
             }
-            stroke(&mut pixmap, path, edge.color, cw);
+            stroke(&mut pixmap, path, theme.lane_rgb(edge.color), cw);
         }
         nodes.push((
             x(row.column),
@@ -74,7 +83,7 @@ pub fn rasterize(graph: &Graph, view: Viewport, cell: (u32, u32)) -> Result<Pixm
         ));
     }
     for (x, y, color, selected, uncommitted) in nodes {
-        let rgb = PALETTE[color % PALETTE.len()];
+        let rgb = theme.lane_rgb(color);
         let mut paint = Paint::default();
         let radius = (cw * 0.34).max(2.5);
         if selected {
@@ -100,8 +109,17 @@ pub fn rasterize(graph: &Graph, view: Viewport, cell: (u32, u32)) -> Result<Pixm
             );
         }
         if uncommitted {
-            let bg = if selected { SELECT_RGB } else { BG_RGB };
-            paint.set_color_rgba8(bg.0, bg.1, bg.2, 255);
+            let bg = if selected {
+                theme.selection_rgb()
+            } else {
+                None
+            };
+            if let Some(bg) = bg.or((theme.mode == ThemeMode::Classic).then_some(CLASSIC_BG)) {
+                paint.set_color_rgba8(bg.0, bg.1, bg.2, 255);
+            } else {
+                // Erase the edge inside a hollow worktree node, revealing the pane.
+                paint.blend_mode = tiny_skia::BlendMode::Clear;
+            }
             if let Some(path) = PathBuilder::from_circle(x, y, radius * 0.55) {
                 pixmap.fill_path(
                     &path,
@@ -116,8 +134,7 @@ pub fn rasterize(graph: &Graph, view: Viewport, cell: (u32, u32)) -> Result<Pixm
     Ok(pixmap)
 }
 
-fn stroke(pixmap: &mut Pixmap, path: PathBuilder, color: usize, cw: f32) {
-    let rgb = PALETTE[color % PALETTE.len()];
+fn stroke(pixmap: &mut Pixmap, path: PathBuilder, rgb: crate::theme::Rgb, cw: f32) {
     let mut paint = Paint::default();
     paint.set_color_rgba8(rgb.0, rgb.1, rgb.2, 255);
     if let Some(path) = path.finish() {
@@ -140,7 +157,7 @@ pub struct Surface {
     endpoint: crate::herdr::socket::Endpoint,
     stream: Option<std::os::unix::net::UnixStream>,
     cell: (u32, u32),
-    last_frame: Option<(u64, Viewport)>,
+    last_frame: Option<(u64, Viewport, Theme)>,
 }
 
 #[cfg(unix)]
@@ -173,16 +190,16 @@ impl Surface {
         Ok(())
     }
 
-    pub fn paint(&mut self, graph: &Graph, view: Viewport) -> Result<()> {
+    pub fn paint(&mut self, graph: &Graph, view: Viewport, theme: Theme) -> Result<()> {
         use std::io::Write;
         if view.area.is_empty() {
             self.hide();
             return Ok(());
         }
-        if self.last_frame == Some((graph.fingerprint, view)) {
+        if self.last_frame == Some((graph.fingerprint, view, theme)) {
             return Ok(());
         }
-        let pixmap = rasterize(graph, view, self.cell)?;
+        let pixmap = rasterize(graph, view, self.cell, theme)?;
         if self.stream.is_none() {
             let mut stream = self.endpoint.connect()?;
             self.endpoint.request_on(&mut stream, "pane.graphics.stream", serde_json::json!({"pane_id":self.endpoint.pane,"layer_id":"git-graph","z_index":1}))?;
@@ -197,7 +214,7 @@ impl Surface {
         frame.push(b'\n');
         frame.extend(data);
         stream.write_all(&frame)?;
-        self.last_frame = Some((graph.fingerprint, view));
+        self.last_frame = Some((graph.fingerprint, view, theme));
         Ok(())
     }
 
@@ -217,7 +234,7 @@ impl Surface {
     pub fn refresh_size(&mut self) -> Result<()> {
         Ok(())
     }
-    pub fn paint(&mut self, _: &Graph, _: Viewport) -> Result<()> {
+    pub fn paint(&mut self, _: &Graph, _: Viewport, _: Theme) -> Result<()> {
         Ok(())
     }
     pub fn hide(&mut self) {}
@@ -226,6 +243,53 @@ impl Surface {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inherited_graph_has_transparent_background_and_the_same_selection_as_text() {
+        let mut commits = crate::git::demo().commits;
+        commits[0].oid = crate::git::WORKTREE_OID.into();
+        let graph = Graph::build(&commits);
+        for (bg, fg) in [
+            ((250, 250, 250), (30, 30, 30)),
+            ((20, 20, 20), (230, 230, 230)),
+        ] {
+            let theme = Theme {
+                background: Some(bg),
+                foreground: Some(fg),
+                palette: [Some((51, 170, 136)); 6],
+                ..Theme::default()
+            };
+            let view = Viewport {
+                area: Rect::new(0, 0, 14, 16),
+                top: 0,
+                selected: 1,
+                column_offset: 0,
+            };
+            let image = rasterize(&graph, view, (10, 20), theme).unwrap();
+            assert_eq!(image.pixel(0, 0).unwrap().alpha(), 0);
+            // Hollow worktree nodes clear their center instead of painting a dark dot.
+            assert_eq!(
+                image
+                    .pixel((graph.rows[0].column * 30 + 15) as u32, 10)
+                    .unwrap()
+                    .alpha(),
+                0
+            );
+            let pixel = image.pixel(0, 40).unwrap();
+            let selected = theme.selection_rgb().unwrap();
+            assert_eq!(
+                (pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()),
+                (selected.0, selected.1, selected.2, 255)
+            );
+            assert!(
+                image
+                    .pixels()
+                    .iter()
+                    .any(|p| (p.red(), p.green(), p.blue(), p.alpha()) == (51, 170, 136, 255))
+            );
+        }
+    }
+
     #[test]
     fn renders_visible_slice_with_antialiasing_and_bounds() {
         let graph = Graph::build(&crate::git::demo().commits);
@@ -235,13 +299,13 @@ mod tests {
             selected: 2,
             column_offset: 0,
         };
-        let image = rasterize(&graph, view, (10, 20)).unwrap();
+        let image = rasterize(&graph, view, (10, 20), Theme::new(ThemeMode::Classic)).unwrap();
         assert_eq!((image.width(), image.height()), (140, 320));
         let colors: std::collections::HashSet<_> = image.data().as_chunks::<4>().0.iter().collect();
         assert!(
             colors.len() > 30,
             "Curves should have antialiased intermediate colors"
         );
-        assert!(rasterize(&graph, view, (4000, 4000)).is_err());
+        assert!(rasterize(&graph, view, (4000, 4000), Theme::new(ThemeMode::Classic)).is_err());
     }
 }

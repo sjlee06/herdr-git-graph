@@ -77,6 +77,31 @@ Git runs with `--no-optional-locks`, so background status queries do not rewrite
 | Left click | Select a commit or apply a branch filter |
 | Mouse wheel | Scroll the panel under the pointer |
 
+## Terminal theme
+
+The default `--theme auto` reads the current terminal foreground, background, and the six ANSI colors used for graph lanes and diffs, using OSC 10/11/4 queries. Herdr 0.9.0 answers these queries from its pane terminal, including the host terminal colors it has received. Text and curves use the same returned RGB values. This also works outside Herdr when the terminal supports color queries.
+
+The normal background and foreground remain terminal defaults, so the pane background and terminal transparency are preserved. Curve PNGs have a transparent background. Muted text and selection backgrounds are derived from the returned foreground/background, for both light and dark themes. Selection background is an application-derived tint, not the terminal's native text-selection color. Press `r` outside search/help, or reopen the graph, after changing themes to query the colors again.
+
+This follows the **pane's terminal theme**. Herdr's own sidebar/accent/selection configuration is a separate UI theme; its complete resolved token set is not exposed by the documented plugin/socket API. The plugin does not read terminal configuration files or assume a theme name identifies the active colors. See [Herdr configuration](https://herdr.dev/docs/config-reference/) and the [Herdr 0.9.0 color-query implementation](https://github.com/herdrdev/herdr/blob/v0.9.0/src/pane/terminal.rs).
+
+```bash
+./bin/herdr-git-graph --theme auto       # default: query actual colors
+./bin/herdr-git-graph --theme terminal   # native defaults/ANSI colors, no queries
+./bin/herdr-git-graph --theme classic    # original fixed dark theme
+```
+
+Queries are asynchronous and do not delay opening the UI. Unsupported or partial replies retain native defaults and ANSI colors. Curves require all six lane colors to be resolved; otherwise the graph stays in text mode instead of guessing PNG colors. `--theme terminal` therefore uses text. `--theme classic --renderer curves` can use fixed curve colors without terminal queries. Late color replies are filtered from keyboard input.
+
+`HERDR_GIT_GRAPH_THEME=auto|terminal|classic` sets the default; `--theme` takes precedence. Launcher commands forward the selected mode to the new pane. To override the theme for an explicitly opened plugin pane:
+
+```bash
+herdr plugin pane open --plugin herdr.git-graph --entrypoint graph \
+  --cwd /path/to/repository --focus --env HERDR_GIT_GRAPH_THEME=classic
+```
+
+Headless `--snapshot` and `--graph-png` exports cannot query the user's terminal. With `--theme auto` they use the reproducible classic demo theme. An explicit `--theme terminal --snapshot` illustrates native styles with sample colors; it is not a capture of the current terminal theme.
+
 ## Renderers
 
 ```bash
@@ -85,7 +110,7 @@ Git runs with `--no-optional-locks`, so background status queries do not rewrite
 ./bin/herdr-git-graph --renderer curves
 ```
 
-- **auto** is the default. It attempts Herdr graphics when the required pane environment is available and otherwise uses text.
+- **auto** is the default. It attempts Herdr graphics when the pane environment and resolved lane colors are available and otherwise uses text.
 - **text** always uses colored Unicode nodes and connecting lines.
 - **curves** attempts the same pixel renderer, with a visible fallback reason if setup fails.
 

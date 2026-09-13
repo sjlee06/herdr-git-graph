@@ -8,7 +8,10 @@ use herdr_git_graph::{
     app::{App, Worker},
     git,
     graphics::{Surface, Viewport},
-    herdr, ui,
+    herdr,
+    theme::{Theme, ThemeMode},
+    theme_probe::ThemeProbe,
+    ui,
 };
 use std::{
     io::{self, IsTerminal},
@@ -40,6 +43,9 @@ struct Args {
     /// Graph output; auto negotiates Herdr graphics, text works in any terminal
     #[arg(long, value_enum, default_value_t = Renderer::Auto)]
     renderer: Renderer,
+    /// Color theme; auto reads the current terminal palette
+    #[arg(long, env = "HERDR_GIT_GRAPH_THEME", value_enum, default_value_t = ThemeMode::Auto)]
+    theme: ThemeMode,
     /// Maximum commits to load per branch view
     #[arg(long, default_value_t = 2000, value_parser = clap::value_parser!(u32).range(1..=50000))]
     limit: u32,
@@ -94,10 +100,10 @@ fn main() -> Result<()> {
         herdr::repository_path(args.repo.as_deref())?
     };
     if args.open_pane {
-        return herdr::open_pane(&root);
+        return herdr::open_pane(&root, args.theme);
     }
     if args.open_sidebar {
-        return herdr::open_sidebar(&root);
+        return herdr::open_sidebar(&root, args.theme);
     }
     let repo = if args.demo {
         git::demo()
@@ -109,6 +115,14 @@ fn main() -> Result<()> {
         .with_refresh_interval(
             (!args.no_auto_refresh).then_some(Duration::from_secs(args.refresh_interval)),
         );
+    // A headless export has no host terminal to query; retain reproducible demos.
+    app.theme = Theme::new(
+        if args.theme == ThemeMode::Auto && (args.snapshot.is_some() || args.graph_png.is_some()) {
+            ThemeMode::Classic
+        } else {
+            args.theme
+        },
+    );
     if args.check {
         println!(
             "Repository: {}\nHEAD: {}\nBranches: {}\nCommits: {}\nGraph lanes: {}\nUncommitted files: {}",
@@ -128,16 +142,15 @@ fn main() -> Result<()> {
         {
             app.detail = git::details(&root, oid)?;
         }
-        ui::snapshot(
-            &mut app,
-            path,
-            args.width,
-            args.height,
-            args.renderer == Renderer::Curves,
-        )?;
+        let smooth = args.renderer == Renderer::Curves && app.theme.supports_curves();
+        ui::snapshot(&mut app, path, args.width, args.height, smooth)?;
         println!("Screen snapshot: {}", path.display());
     }
     if let Some(path) = &args.graph_png {
+        anyhow::ensure!(
+            app.theme.supports_curves(),
+            "PNG export requires --theme classic; a headless process cannot query terminal colors"
+        );
         let width = (app.graph.width * 3 + 2).clamp(10, 100) as u16;
         let height = (app.graph.rows.len() * 2).clamp(2, 120) as u16;
         let view = Viewport {
@@ -146,7 +159,8 @@ fn main() -> Result<()> {
             selected: 0,
             column_offset: 0,
         };
-        herdr_git_graph::graphics::rasterize(&app.graph, view, (18, 36))?.save_png(path)?;
+        herdr_git_graph::graphics::rasterize(&app.graph, view, (18, 36), app.theme)?
+            .save_png(path)?;
         println!("Smooth graph: {}", path.display());
     }
     if args.snapshot.is_some() || args.graph_png.is_some() {
@@ -175,24 +189,42 @@ fn main() -> Result<()> {
         ratatui::restore();
         old_hook(info);
     }));
-    let mut surface = if args.renderer == Renderer::Text {
-        None
-    } else {
-        match Surface::connect() {
-            Ok(surface) => {
-                app.renderer_status = "CURVES".into();
-                Some(surface)
-            }
-            Err(error) => {
-                if args.renderer == Renderer::Curves {
-                    app.status = format!("Text fallback: {error}");
-                }
-                None
-            }
-        }
-    };
+    let mut probe = (args.theme == ThemeMode::Auto).then(ThemeProbe::default);
+    if let Some(probe) = &probe {
+        probe.query()?;
+    }
+    let mut surface = None;
+    let mut graphics_attempted = false;
+    let palette_deadline = std::time::Instant::now() + Duration::from_millis(700);
+    let mut palette_fallback_reported = false;
     let mut dirty = true;
     while !app.quit && !stop.load(Ordering::Relaxed) {
+        if args.renderer != Renderer::Text && !graphics_attempted && app.theme.supports_curves() {
+            graphics_attempted = true;
+            match Surface::connect() {
+                Ok(connected) => {
+                    surface = Some(connected);
+                    app.renderer_status = "CURVES".into();
+                    if palette_fallback_reported {
+                        app.status = "Ready · terminal theme".into();
+                    }
+                }
+                Err(error) if args.renderer == Renderer::Curves => {
+                    app.status = format!("Text fallback: {error}");
+                }
+                Err(_) => {}
+            }
+            dirty = true;
+        } else if args.renderer == Renderer::Curves
+            && !app.theme.supports_curves()
+            && !palette_fallback_reported
+            && std::time::Instant::now() >= palette_deadline
+        {
+            app.status = "Text fallback: terminal palette unavailable; --theme classic enables fixed curve colors".into();
+            palette_fallback_reported = true;
+            dirty = true;
+        }
+
         if let Some(worker) = &worker {
             while let Ok(response) = worker.receiver.try_recv() {
                 dirty |= app.apply(response);
@@ -208,7 +240,7 @@ fn main() -> Result<()> {
             dirty = false;
             if let Some(graphics) = &mut surface {
                 let result = if let Some(view) = viewport {
-                    graphics.paint(&app.graph, view)
+                    graphics.paint(&app.graph, view, app.theme)
                 } else {
                     graphics.hide();
                     Ok(())
@@ -221,9 +253,25 @@ fn main() -> Result<()> {
                 }
             }
         }
-        if event::poll(Duration::from_millis(40))? {
-            match event::read()? {
+        let previous_theme = app.theme;
+        let input = if let Some(probe) = &mut probe {
+            probe.read(Duration::from_millis(40), &mut app.theme)?
+        } else if event::poll(Duration::from_millis(40))? {
+            Some(event::read()?)
+        } else {
+            None
+        };
+        dirty |= previous_theme != app.theme;
+        if let Some(input) = input {
+            match input {
                 Event::Key(key) if key.kind != KeyEventKind::Release => {
+                    if key.code == event::KeyCode::Char('r')
+                        && !app.searching
+                        && !app.help
+                        && let Some(probe) = &probe
+                    {
+                        probe.query()?;
+                    }
                     app.key(key, worker.as_ref());
                     dirty = true;
                 }

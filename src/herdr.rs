@@ -60,15 +60,16 @@ pub fn context_paths(context: &Value) -> Vec<PathBuf> {
     .collect()
 }
 
-pub fn open_pane(root: &Path) -> Result<()> {
-    open_view(root, false)
+pub fn open_pane(root: &Path, theme: crate::theme::ThemeMode) -> Result<()> {
+    open_view(root, false, theme)
 }
 
-pub fn open_sidebar(root: &Path) -> Result<()> {
-    open_view(root, true)
+pub fn open_sidebar(root: &Path, theme: crate::theme::ThemeMode) -> Result<()> {
+    open_view(root, true, theme)
 }
 
-fn open_view(root: &Path, sidebar: bool) -> Result<()> {
+fn open_view(root: &Path, sidebar: bool, theme: crate::theme::ThemeMode) -> Result<()> {
+    use clap::ValueEnum;
     let context = plugin_context();
     let bin = env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
     let mut command = Command::new(bin);
@@ -88,7 +89,12 @@ fn open_view(root: &Path, sidebar: bool) -> Result<()> {
         ])
         .arg(root)
         .arg("--env")
-        .arg(format!("HERDR_GIT_GRAPH_REPO={}", root.display()));
+        .arg(format!("HERDR_GIT_GRAPH_REPO={}", root.display()))
+        .arg("--env")
+        .arg(format!(
+            "HERDR_GIT_GRAPH_THEME={}",
+            theme.to_possible_value().unwrap().get_name()
+        ));
     if sidebar {
         // Herdr actions carry their source pane in the invocation context.
         // Split placement accepts a target pane, but rejects workspace_id.

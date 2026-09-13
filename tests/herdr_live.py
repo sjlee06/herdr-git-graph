@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -13,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def verify(base, herdr):
-    env = {key: value for key, value in os.environ.items() if not key.startswith("HERDR_")}
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith("HERDR_") and key != "NO_COLOR"}
     for key, folder in [("XDG_CONFIG_HOME", "c"), ("XDG_STATE_HOME", "s"),
                         ("XDG_DATA_HOME", "d"), ("XDG_CACHE_HOME", "cache")]:
         env[key] = str(base / folder)
@@ -83,11 +85,22 @@ def verify(base, herdr):
             assert "GIT GRAPH" in screen, screen
             assert "COMMIT INSPECTOR" not in screen, screen
 
+            # Auto starts with symbolic ANSI colors, then replaces lane/accent
+            # colors with actual RGB replies from Herdr's pane terminal.
+            for _ in range(50):
+                ansi = run("pane", "read", sidebar["pane_id"], "--source", "visible",
+                           "--ansi", "--raw").stdout
+                if re.search(r"38[;:]2[;:]", ansi):
+                    break
+                time.sleep(0.1)
+            assert re.search(r"38[;:]2[;:]", ansi), repr(ansi)
+            assert "48;2;12;17;24" not in ansi, "Classic background leaked into auto theme"
+
             full = invoke("open")
             assert full["workspace_id"] == workspace, full
             assert full["tab_id"] != source_tab, full
             assert full["focused"], full
-            print("PASS: actual Herdr sidebar action, source tab, preserved focus, graph output, full-view action")
+            print("PASS: actual Herdr sidebar action, source tab, preserved focus, OSC theme replies, graph output, full-view action")
         finally:
             # All commands use the test session and isolated XDG paths.
             run("server", "stop", check=False)

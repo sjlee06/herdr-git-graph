@@ -133,6 +133,7 @@ impl Worker {
 }
 
 pub struct App {
+    pub theme: crate::theme::Theme,
     pub repo: Repository,
     pub graph: Graph,
     pub selected: usize,
@@ -172,6 +173,7 @@ impl App {
     pub fn new(repo: Repository, limit: usize, demo: bool) -> Self {
         let graph = Graph::build(&repo.commits);
         let mut app = Self {
+            theme: crate::theme::Theme::default(),
             repo,
             graph,
             selected: 0,
