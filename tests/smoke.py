@@ -274,7 +274,7 @@ def main():
     assert b"BRANCHES" not in terminal.output
     print("PASS: narrow sidebar, search, graph-only focus, mouse, resize, cleanup")
 
-    for colors in [DARK_COLORS, LIGHT_COLORS]:
+    for colors, delay in [(DARK_COLORS, 0.01), (DARK_COLORS, 0.1), (LIGHT_COLORS, 0.1)]:
         terminal = Terminal(binary, ["--renderer", "text"], colors=colors)
         terminal.ready()
         terminal.pump(0.3)
@@ -283,14 +283,22 @@ def main():
         assert b"38;2;51;187;170" in terminal.output
         assert b"48;2;12;17;24" not in terminal.output, "Fixed background leaked into auto theme"
         terminal.send("/themeprobe")
-        # Late replies, BEL/ST terminators and fragmented framing must not become search text.
-        for fragment in ["\x1b", "]11;rgb:", colors["11"], "\x07",
+        # Slow fragments must preserve the search itself, not just hide "rgb:".
+        # A leaked 'r' can trigger a query and '/' can reopen search, so checking
+        # only query_count or the raw output can miss a broken parser.
+        # At 100 ms per character, one reply also exceeds the 700 ms idle
+        # timeout in total; continued input must keep that reply alive.
+        for fragment in ["\x1b", "]11;rgb:", *colors["11"], "\x07",
                          "\x1b]4;6;rgb:3333/bbbb/aaaa", "\x1b", "\\"]:
             os.write(terminal.master, fragment.encode())
-            terminal.pump(0.01)
+            terminal.pump(delay)
+            assert "/ themeprobe▏" in terminal.screen_text(), terminal.screen_text()
+            assert terminal.query_count == 8, terminal.query_count
         terminal.send("\r")
+        assert "/ themeprobe ·" in terminal.screen_text(), terminal.screen_text()
         terminal.send("r")
         assert terminal.query_count == 16
+        assert "/ themeprobe ·" in terminal.screen_text(), terminal.screen_text()
         terminal.finish()
         assert b"rgb:" not in terminal.output, "Color reply leaked into search"
     print("PASS: light/dark OSC colors, inherited background, late/fragmented replies, theme refresh")

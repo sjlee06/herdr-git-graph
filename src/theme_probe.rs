@@ -8,10 +8,15 @@ use std::{
     time::{Duration, Instant},
 };
 
+// Esc and an OSC introducer share the same first byte. Allow for separate PTY
+// reads and scheduler delays before treating a lone Esc as a user key.
+const ESCAPE_TIMEOUT: Duration = Duration::from_millis(250);
+const RESPONSE_IDLE_TIMEOUT: Duration = Duration::from_millis(700);
+
 #[derive(Default)]
 pub struct ThemeProbe {
     body: Option<String>,
-    started: Option<Instant>,
+    last_response_input: Option<Instant>,
     escape: Option<Instant>,
     pending: VecDeque<Event>,
 }
@@ -29,36 +34,40 @@ impl ThemeProbe {
     pub fn read(&mut self, timeout: Duration, theme: &mut Theme) -> io::Result<Option<Event>> {
         let deadline = Instant::now() + timeout;
         loop {
-            self.expire();
             if let Some(event) = self.pending.pop_front() {
                 return Ok(Some(event));
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() || !event::poll(remaining)? {
+            // Consume already queued fragments before expiring parser state.
+            // A busy frame or a delayed wakeup must not turn buffered OSC bytes
+            // into keyboard input. A zero timeout still checks the input queue.
+            if !event::poll(remaining)? {
                 self.expire();
                 return Ok(self.pending.pop_front());
             }
             self.feed(event::read()?, theme);
+            if Instant::now() >= deadline {
+                return Ok(self.pending.pop_front());
+            }
         }
     }
 
     fn expire(&mut self) {
-        // Bound malformed or unterminated responses; normal input remains usable.
+        // Bound idle, unterminated responses, not the total time spent receiving
+        // a valid response. Each fragment gets a fresh window to complete.
         if self
-            .started
-            .is_some_and(|at| at.elapsed() >= Duration::from_millis(700))
+            .last_response_input
+            .is_some_and(|at| at.elapsed() >= RESPONSE_IDLE_TIMEOUT)
         {
             self.body = None;
-            self.started = None;
-        }
-        if self
-            .escape
-            .is_some_and(|at| at.elapsed() >= Duration::from_millis(40))
-        {
+            self.last_response_input = None;
             self.escape = None;
-            if self.body.is_none() {
-                self.pending.push_back(Event::Key(KeyCode::Esc.into()));
-            }
+        }
+        // Within an OSC response, Esc belongs to the ST terminator. Keep it
+        // until the next fragment or the response's idle timeout.
+        if self.body.is_none() && self.escape.is_some_and(|at| at.elapsed() >= ESCAPE_TIMEOUT) {
+            self.escape = None;
+            self.pending.push_back(Event::Key(KeyCode::Esc.into()));
         }
     }
 
@@ -69,7 +78,7 @@ impl ThemeProbe {
         };
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.body = None;
-            self.started = None;
+            self.last_response_input = None;
             self.escape = None;
             self.pending.push_back(event);
             return;
@@ -83,22 +92,29 @@ impl ThemeProbe {
         // Keep a separate Esc briefly as terminals may split those bytes across reads.
         if escaped && key.code == KeyCode::Char(']') {
             self.body = Some(String::new());
-            self.started = Some(Instant::now());
+            self.last_response_input = Some(Instant::now());
             return;
         }
         if let Some(body) = &mut self.body {
+            self.last_response_input = Some(Instant::now());
             if (escaped && key.code == KeyCode::Char('\\'))
                 || (key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL))
             {
                 theme.apply_response(body);
                 self.body = None;
-                self.started = None;
+                self.last_response_input = None;
             } else if key.code == KeyCode::Esc {
                 self.escape = Some(Instant::now());
             } else if let KeyCode::Char(c) = key.code
                 && body.len() < 512
             {
                 body.push(c);
+            } else {
+                // An overlong response or an unrelated key cannot complete a
+                // color reply. Recover without swallowing the user's key.
+                self.body = None;
+                self.last_response_input = None;
+                self.pending.push_back(event);
             }
             return;
         }
@@ -182,5 +198,96 @@ mod tests {
             Some(Event::Key(KeyCode::Esc.into()))
         );
         assert!(probe.pending.is_empty());
+    }
+
+    #[test]
+    fn keeps_a_delayed_osc_introducer_out_of_keyboard_input() {
+        let mut probe = ThemeProbe::default();
+        let mut theme = Theme::default();
+        probe.feed(Event::Key(KeyCode::Esc.into()), &mut theme);
+        probe.escape = Some(Instant::now() - Duration::from_millis(100));
+        probe.expire();
+        assert!(probe.pending.is_empty());
+        for c in "]11;rgb:12/18/20".chars() {
+            probe.feed(key(c, KeyModifiers::NONE), &mut theme);
+        }
+        probe.feed(key('g', KeyModifiers::CONTROL), &mut theme);
+        assert_eq!(theme.background, Some((18, 24, 32)));
+        assert!(probe.pending.is_empty());
+    }
+
+    #[test]
+    fn slow_response_fragments_renew_the_idle_timeout() {
+        let mut probe = ThemeProbe::default();
+        let mut theme = Theme::default();
+        probe.feed(key(']', KeyModifiers::ALT), &mut theme);
+        for c in "11;rgb:12/18/20".chars() {
+            // Each fragment can arrive near the idle deadline, even when the
+            // complete response takes much longer than that deadline.
+            probe.last_response_input = Some(Instant::now() - Duration::from_millis(600));
+            probe.expire();
+            let before = Instant::now();
+            probe.feed(key(c, KeyModifiers::NONE), &mut theme);
+            assert!(probe.last_response_input.is_some_and(|at| at >= before));
+        }
+        probe.feed(Event::Key(KeyCode::Esc.into()), &mut theme);
+        probe.escape = Some(Instant::now() - Duration::from_millis(500));
+        probe.last_response_input = probe.escape;
+        probe.expire();
+        probe.feed(key('\\', KeyModifiers::NONE), &mut theme);
+        assert_eq!(theme.background, Some((18, 24, 32)));
+        assert!(probe.pending.is_empty());
+        probe.feed(key('q', KeyModifiers::NONE), &mut theme);
+        assert_eq!(
+            probe.pending.pop_front(),
+            Some(key('q', KeyModifiers::NONE))
+        );
+    }
+
+    #[test]
+    fn lone_escape_and_idle_response_recover_without_leaking_terminators() {
+        let mut probe = ThemeProbe::default();
+        let mut theme = Theme::default();
+        probe.feed(Event::Key(KeyCode::Esc.into()), &mut theme);
+        probe.escape = Some(Instant::now() - ESCAPE_TIMEOUT);
+        probe.expire();
+        assert_eq!(
+            probe.pending.pop_front(),
+            Some(Event::Key(KeyCode::Esc.into()))
+        );
+        probe.feed(key(']', KeyModifiers::ALT), &mut theme);
+        probe.feed(Event::Key(KeyCode::Esc.into()), &mut theme);
+        probe.last_response_input = Some(Instant::now() - RESPONSE_IDLE_TIMEOUT);
+        probe.expire();
+        assert!(probe.pending.is_empty());
+        assert!(probe.escape.is_none());
+        probe.feed(key('q', KeyModifiers::NONE), &mut theme);
+        assert_eq!(
+            probe.pending.pop_front(),
+            Some(key('q', KeyModifiers::NONE))
+        );
+    }
+
+    #[test]
+    fn malformed_responses_preserve_unrelated_keys_and_bound_buffer_size() {
+        let mut probe = ThemeProbe::default();
+        let mut theme = Theme::default();
+        probe.feed(key(']', KeyModifiers::ALT), &mut theme);
+        let enter = Event::Key(KeyCode::Enter.into());
+        probe.feed(enter.clone(), &mut theme);
+        assert_eq!(probe.pending.pop_front(), Some(enter));
+        assert!(probe.body.is_none());
+
+        probe.feed(key(']', KeyModifiers::ALT), &mut theme);
+        for _ in 0..512 {
+            probe.feed(key('1', KeyModifiers::NONE), &mut theme);
+        }
+        assert!(probe.pending.is_empty());
+        probe.feed(key('q', KeyModifiers::NONE), &mut theme);
+        assert!(probe.body.is_none());
+        assert_eq!(
+            probe.pending.pop_front(),
+            Some(key('q', KeyModifiers::NONE))
+        );
     }
 }
