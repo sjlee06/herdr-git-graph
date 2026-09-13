@@ -2,8 +2,10 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{
     env,
+    ffi::OsStr,
+    io::Write,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
 };
 
 pub fn repository_path(explicit: Option<&Path>) -> Result<PathBuf> {
@@ -72,7 +74,7 @@ fn open_view(root: &Path, sidebar: bool, theme: crate::theme::ThemeMode) -> Resu
     use clap::ValueEnum;
     let context = plugin_context();
     let bin = env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
-    let mut command = Command::new(bin);
+    let mut command = Command::new(&bin);
     command
         .args([
             "plugin",
@@ -95,22 +97,130 @@ fn open_view(root: &Path, sidebar: bool, theme: crate::theme::ThemeMode) -> Resu
             "HERDR_GIT_GRAPH_THEME={}",
             theme.to_possible_value().unwrap().get_name()
         ));
-    if sidebar {
+    let source_pane = if sidebar {
         // Herdr actions carry their source pane in the invocation context.
         // Split placement accepts a target pane, but rejects workspace_id.
         let id = context_id(&context, "focused_pane_id", "HERDR_PANE_ID")
             .context("사이드바를 열 대상 패널이 없습니다. Herdr 패널 안에서 액션을 실행하세요.")?;
         command
             .args(["--direction", "right", "--target-pane"])
-            .arg(id);
-    } else if let Some(id) = context_id(&context, "workspace_id", "HERDR_WORKSPACE_ID") {
-        command.arg("--workspace").arg(id);
-    }
-    let status = command.status().context("Herdr를 실행할 수 없습니다.")?;
-    if !status.success() {
+            .arg(&id);
+        Some(id)
+    } else {
+        if let Some(id) = context_id(&context, "workspace_id", "HERDR_WORKSPACE_ID") {
+            command.arg("--workspace").arg(id);
+        }
+        None
+    };
+    let output = command
+        .stderr(Stdio::inherit())
+        .output()
+        .context("Herdr를 실행할 수 없습니다.")?;
+    if !output.status.success() {
         bail!("Herdr Git Graph 패널을 열지 못했습니다. 플러그인 등록을 확인하세요.");
     }
+    if let Some(source) = source_pane {
+        // Herdr 0.9 has no width/ratio option on plugin pane open. Resize the
+        // newly created split once, without changing the caller's focus.
+        let resize = || -> Result<()> {
+            let opened: Value = serde_json::from_slice(&output.stdout)?;
+            let pane = opened
+                .pointer("/result/plugin_pane/pane/pane_id")
+                .and_then(Value::as_str)
+                .context("새 패널 ID가 없습니다.")?;
+            size_sidebar(&bin, &source, pane)
+        };
+        if let Err(error) = resize() {
+            eprintln!("사이드바는 열렸지만 초기 너비를 맞추지 못했습니다: {error}");
+        }
+    }
+    // Keep the original pane-open response as the action's sole JSON output.
+    std::io::stdout().write_all(&output.stdout)?;
     Ok(())
+}
+
+// Allow room for Herdr borders/scrollbar, graph lanes, and the full
+// "Uncommitted changes" subject. This is the outer split width in columns.
+const SIDEBAR_WIDTH: u16 = 40;
+
+fn size_sidebar(bin: &OsStr, source: &str, pane: &str) -> Result<()> {
+    let output = Command::new(bin)
+        .args(["pane", "layout", "--pane", pane])
+        .output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "패널 레이아웃을 조회하지 못했습니다."
+    );
+    let response: Value = serde_json::from_slice(&output.stdout)?;
+    let layout = response
+        .pointer("/result/layout")
+        .context("패널 레이아웃이 없습니다.")?;
+    let (direction, amount) =
+        sidebar_resize(layout, source, pane).context("사이드바 분할 크기를 찾지 못했습니다.")?;
+    if amount < f64::EPSILON {
+        return Ok(());
+    }
+    // Use the pane facing the new divider so a nested split cannot select an
+    // existing ancestor divider on the other side of the source pane.
+    let target = if direction == "right" { source } else { pane };
+    let output = Command::new(bin)
+        .args([
+            "pane",
+            "resize",
+            "--pane",
+            target,
+            "--direction",
+            direction,
+            "--amount",
+        ])
+        .arg(amount.to_string())
+        .output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "사이드바 분할 크기를 조절하지 못했습니다."
+    );
+    Ok(())
+}
+
+fn sidebar_resize(layout: &Value, source: &str, pane: &str) -> Option<(&'static str, f64)> {
+    use ratatui::layout::Rect;
+    fn rect(value: &Value) -> Option<Rect> {
+        let field = |key| u16::try_from(value.get(key)?.as_u64()?).ok();
+        Some(Rect::new(
+            field("x")?,
+            field("y")?,
+            field("width")?,
+            field("height")?,
+        ))
+    }
+    let panes = layout.get("panes")?.as_array()?;
+    let find = |id: &str| rect(panes.iter().find(|p| p["pane_id"] == id)?.get("rect")?);
+    let source_rect = find(source)?;
+    let pane_rect = find(pane)?;
+    let (split, area) = layout
+        .get("splits")?
+        .as_array()?
+        .iter()
+        .filter(|split| split["direction"] == "right")
+        .filter_map(|split| Some((split, rect(split.get("rect")?)?)))
+        .filter(|(_, area)| {
+            area.width > 0
+                && area.intersection(source_rect) == source_rect
+                && area.intersection(pane_rect) == pane_rect
+        })
+        .min_by_key(|(_, area)| u32::from(area.width) * u32::from(area.height))?;
+    let current = split.get("ratio")?.as_f64()?;
+    if !current.is_finite() || !(0.1..=0.9).contains(&current) {
+        return None;
+    }
+    // Leave a small source pane at least half the available width. Herdr also
+    // constrains each child to 10–90% of its parent split.
+    let width = SIDEBAR_WIDTH.min(area.width / 2);
+    let target = (1.0 - f64::from(width) / f64::from(area.width)).clamp(0.1, 0.9);
+    Some((
+        if target >= current { "right" } else { "left" },
+        (target - current).abs(),
+    ))
 }
 
 #[cfg(unix)]
@@ -177,6 +287,40 @@ pub mod socket {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sidebar_width_uses_its_own_split_and_respects_herdr_limits() {
+        for (total, current, expected) in [
+            (100, 0.5, 0.6),
+            (80, 0.8, 0.5),
+            (40, 0.5, 0.5),
+            (400, 0.5, 0.9),
+        ] {
+            let first = (f64::from(total) * current).round() as u16;
+            let layout = json!({
+                "panes": [
+                    {"pane_id":"source", "rect":{"x":30,"y":2,"width":first,"height":20}},
+                    {"pane_id":"graph", "rect":{"x":30+first,"y":2,"width":total-first,"height":20}}
+                ],
+                "splits": [
+                    {"direction":"right","ratio":0.5,"rect":{"x":0,"y":0,"width":500,"height":40}},
+                    {"direction":"down","ratio":0.5,"rect":{"x":30,"y":0,"width":total,"height":40}},
+                    {"direction":"right","ratio":current,"rect":{"x":30,"y":2,"width":total,"height":20}}
+                ]
+            });
+            let (direction, amount) = sidebar_resize(&layout, "source", "graph").unwrap();
+            let ratio = current
+                + if direction == "right" {
+                    amount
+                } else {
+                    -amount
+                };
+            assert!((ratio - expected).abs() < 0.0001, "{total}: {ratio}");
+            assert!(sidebar_resize(&layout, "missing", "graph").is_none());
+        }
+        assert!(sidebar_resize(&json!({}), "source", "graph").is_none());
+    }
+
     #[test]
     fn worktree_context_uses_checkout_not_shared_repo_root() {
         let paths = context_paths(

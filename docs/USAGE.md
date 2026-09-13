@@ -30,7 +30,7 @@ herdr plugin pane open --plugin herdr.git-graph --entrypoint sidebar \
 
 The sidebar displays only the history graph and commit list, with repository and HEAD context above it. Commit subjects occupy the first line; hashes and ref labels occupy the second. The branch list, author/date columns, and diff inspector are hidden. Commit diffs are not loaded in this mode.
 
-The minimum size is 24 columns × 8 rows. Adjust the split width by dragging the divider or using Herdr's resize mode (`prefix+r` by default). Focus it with `prefix+l` from the pane on its left. Search, `n`/`N`, navigation, graph panning, mouse selection/scrolling, `r`, help, and quit work as usual. `Tab`, `Shift-Tab`, `Enter` outside search, and `d` keep the graph-only layout. Close the sidebar with `q` while it is focused. Each open action creates a new split.
+The sidebar action initially sizes the new split to 40 columns so the full `Uncommitted changes` subject fits alongside the graph, including room for Herdr borders and its scrollbar. A small source pane keeps at least half its width; Herdr’s 10–90% split-ratio limits also apply. This is a one-time adjustment, so subsequent manual resizing is preserved. Direct `plugin pane open` and standalone `--sidebar` use the size supplied by the host. The minimum content size is 24 columns × 8 rows. Adjust the split width by dragging the divider or using Herdr's resize mode (`prefix+r` by default). Focus it with `prefix+l` from the pane on its left. Search, `n`/`N`, navigation, graph panning, mouse selection/scrolling, `r`, help, and quit work as usual. `Tab`, `Shift-Tab`, `Enter` outside search, and `d` keep the graph-only layout. Close the sidebar with `q` while it is focused. Each open action creates a new split.
 
 The action takes its target from the invocation's focused pane. When opening the pane explicitly, run the command above inside Herdr, or pass a known pane ID with `--target-pane`. Split panes must not use `--workspace`.
 
@@ -76,6 +76,8 @@ Git runs with `--no-optional-locks`, so background status queries do not rewrite
 | `q` / `Ctrl-C` | Quit; `q` closes Help first if it is open |
 | Left click | Select a commit or apply a branch filter |
 | Mouse wheel | Scroll the panel under the pointer |
+
+Footer hints keep complete key/action pairs at every supported width, always showing `/ search`, `? help`, and `q quit` outside search. Additional hints appear as space allows. Long search input scrolls to keep the cursor visible. Help wraps to the available width and scrolls with `↑↓` / `j` / `k`, `PgUp` / `PgDn`, and `Home` / `End` (or `g` / `G`); `Esc`, `?`, or `q` closes Help. `Ctrl-C` quits immediately, including during search and Help.
 
 ## Terminal theme
 

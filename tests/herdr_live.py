@@ -21,6 +21,19 @@ def verify(base, herdr):
         env[key] = str(base / folder)
     cli = [herdr, "--session", "sidebar-test"]
 
+    # A known working-tree change makes the width check independent of whether
+    # the plugin checkout itself is clean (as it normally is in CI).
+    repo = base / "repo"
+    repo.mkdir()
+    for args in [("init",), ("config", "user.name", "Graph test"),
+                 ("config", "user.email", "graph-test@example.invalid")]:
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    (repo / "example.txt").write_text("initial\n")
+    subprocess.run(["git", "-C", str(repo), "add", "example.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "commit.gpgsign=false", "commit",
+                    "-m", "Initial history"], check=True, capture_output=True)
+    (repo / "example.txt").write_text("uncommitted\n")
+
     def run(*args, check=True):
         result = subprocess.run([*cli, *args], cwd=ROOT, env=env, text=True,
                                 capture_output=True, timeout=15)
@@ -56,7 +69,7 @@ def verify(base, herdr):
                 raise AssertionError("Test server did not start")
 
             run("plugin", "link", str(ROOT))
-            created = data("workspace", "create", "--cwd", str(ROOT),
+            created = data("workspace", "create", "--cwd", str(repo),
                            "--label", "Sidebar test", "--focus")
             source = created["root_pane"]["pane_id"]
             source_tab = created["tab"]["tab_id"]
@@ -76,6 +89,10 @@ def verify(base, herdr):
             assert sidebar["tab_id"] == source_tab, sidebar
             assert sidebar["pane_id"] != source, sidebar
             assert not sidebar["focused"], sidebar
+            layout = data("pane", "layout", "--pane", sidebar["pane_id"])["layout"]
+            graph_pane = next(p for p in layout["panes"] if p["pane_id"] == sidebar["pane_id"])
+            assert graph_pane["rect"]["width"] == 40, layout
+            assert layout["focused_pane_id"] == source, layout
             for _ in range(50):
                 screen = run("pane", "read", sidebar["pane_id"],
                              "--source", "visible", "--raw").stdout
@@ -84,6 +101,9 @@ def verify(base, herdr):
                 time.sleep(0.1)
             assert "GIT GRAPH" in screen, screen
             assert "COMMIT INSPECTOR" not in screen, screen
+            assert "Enlarge" not in screen, screen
+            assert "Uncommitted changes" in screen, screen
+            assert "? help" in screen and "q quit" in screen, screen
 
             # Auto starts with symbolic ANSI colors, then replaces lane/accent
             # colors with actual RGB replies from Herdr's pane terminal.
@@ -96,11 +116,20 @@ def verify(base, herdr):
             assert re.search(r"38[;:]2[;:]", ansi), repr(ansi)
             assert "48;2;12;17;24" not in ansi, "Classic background leaked into auto theme"
 
+            # A new graph beside an already split source must resize only its
+            # own divider, leaving the first graph's width and source focus intact.
+            nested = invoke("sidebar")
+            layout = data("pane", "layout", "--pane", nested["pane_id"])["layout"]
+            widths = {p["pane_id"]: p["rect"]["width"] for p in layout["panes"]}
+            assert widths[sidebar["pane_id"]] == 40, layout
+            assert widths[nested["pane_id"]] == 40, layout
+            assert layout["focused_pane_id"] == source, layout
+
             full = invoke("open")
             assert full["workspace_id"] == workspace, full
             assert full["tab_id"] != source_tab, full
             assert full["focused"], full
-            print("PASS: actual Herdr sidebar action, source tab, preserved focus, OSC theme replies, graph output, full-view action")
+            print("PASS: actual Herdr sidebar action, 40-column/nested splits, preserved focus, visible hints, OSC theme replies, graph output, full-view action")
         finally:
             # All commands use the test session and isolated XDG paths.
             run("server", "stop", check=False)

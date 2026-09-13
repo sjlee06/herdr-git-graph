@@ -1,6 +1,6 @@
 # Herdr Git Graph
 
-**Herdr 안에서 Git 브랜치, 병합 이력, 커밋 diff를 탐색하세요.**
+**코드 옆에 Git 이력을 두고, diff가 필요할 때 전체 화면으로 살펴보세요.**
 
 [![CI](https://github.com/sjlee06/herdr-git-graph/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sjlee06/herdr-git-graph/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -8,20 +8,22 @@
 
 [English](README.md) · 한국어
 
-Rust + Ratatui로 만든 조회 전용 Git 그래프 플러그인입니다. 로컬·원격 추적 브랜치와 병합 이력을 살펴보고, 커밋을 검색하고, 변경 내용을 확인할 수 있습니다. 호환되는 Herdr 패널에서는 부드러운 곡선을, 일반 터미널에서는 컬러 Unicode 그래프를 표시합니다.
+Rust + Ratatui로 만든 조회 전용 Git 그래프 플러그인입니다. 작업 화면 오른쪽에 작은 그래프를 두고, 탭을 옮기지 않고 브랜치·병합 이력을 살펴보거나 커밋을 검색할 수 있습니다. 브랜치 필터와 커밋 diff는 전체 화면에서 확인하세요. 호환되는 Herdr 패널에서는 부드러운 곡선을, 일반 터미널에서는 컬러 Unicode 그래프를 표시합니다.
 
-![브랜치 목록, 곡선 커밋 그래프, 상세 패널](docs/preview.png)
+<p align="center">
+  <img src="docs/preview-sidebar.png" width="360" alt="데모 브랜치와 병합 곡선, 커밋 메시지, 키 안내를 표시한 40열 Git Graph 사이드바">
+</p>
 
-*앱의 Ratatui 화면과 곡선 렌더러로 생성한 데모 스냅샷입니다. [문자 모드 미리보기](docs/preview-text.svg).*
+*작업 화면 옆에 두고 보는 사이드바의 데모 화면입니다. classic 테마와 40열 화면으로 생성했으며, Herdr 분할로 열면 바깥 테두리와 스크롤바가 추가됩니다.*
 
 ## 주요 기능
 
+- **그래프 사이드바:** 작업 화면 오른쪽에 기본 40열로 열고 기존 패널의 포커스를 유지. 작업하면서 이력을 검색하고 로컬 변경을 확인.
 - **브랜치·병합 그래프:** 분기별 색상, 브랜치·태그 표시, detached HEAD와 linked worktree 지원.
 - **커밋 상세 보기:** 메타데이터, 변경 파일 통계, 컬러 diff를 한 화면에서 확인.
 - **미커밋 변경 사항:** HEAD 위에 `Uncommitted changes`를 표시하고 스테이징·미스테이징 diff, 새 파일 목록과 충돌 상태를 확인.
 - **자동 갱신:** 기본 2초 간격으로 파일 변경과 로컬 커밋·브랜치 변경을 반영. 선택 항목과 스크롤 위치 유지.
 - **검색과 탐색:** 메시지·작성자·ref·해시 검색, 키보드·마우스 조작.
-- **그래프 사이드바:** 작업 화면 오른쪽에 그래프와 커밋 목록만 표시. 좁은 패널에서도 검색·탐색 지원.
 - **부드러운 곡선:** Herdr 그래픽 API를 통한 베지어 곡선 출력과 일반 터미널용 문자 그래프.
 - **터미널 테마 연동:** 현재 배경·글자색·팔레트를 조회해 반영. 곡선 배경은 투명하게 표시하며 밝은/어두운 테마를 지원합니다. 기존 외형은 `--theme classic`으로 선택할 수 있습니다. [동작과 제한](docs/USAGE.md#terminal-theme).
 
@@ -35,19 +37,27 @@ Rust + Ratatui로 만든 조회 전용 Git 그래프 플러그인입니다. 로�
 herdr plugin install sjlee06/herdr-git-graph
 ```
 
-Git 저장소가 열려 있는 Herdr 작업 공간에서 실행하면 새 탭으로 그래프를 엽니다.
-
-```bash
-herdr plugin action invoke herdr.git-graph.open
-```
-
-작업 화면 옆에 그래프만 두고 보려면 사이드바를 엽니다. 현재 패널 오른쪽에 분할로 열리며 작업 중인 패널의 포커스를 유지합니다.
+Git 저장소가 열려 있는 Herdr 작업 공간에서 사이드바를 엽니다. 현재 패널 오른쪽에 표시하며 작업 중인 패널의 포커스를 유지합니다.
 
 ```bash
 herdr plugin action invoke herdr.git-graph.sidebar
 ```
 
-사이드바는 그래프·커밋 메시지·해시·ref만 표시하며 브랜치 목록과 diff 패널은 숨깁니다. 최소 24열 × 8행을 지원합니다. 분할선 드래그나 Herdr 크기 조절 모드(`prefix+r`)로 폭을 조절하고, `prefix+l`로 오른쪽 그래프에 이동해 조작할 수 있습니다. 그래프에서 `q`를 누르면 닫힙니다.
+사이드바는 기본 **40열**로 열립니다. 그래프 옆의 `Uncommitted changes`와 Herdr 테두리·스크롤바 공간을 고려한 폭입니다. 원래 패널이 작거나 Herdr 분할 비율 제한에 걸리면 가능한 폭으로 조절합니다. 분할선을 드래그하거나 `prefix+r`로 크기를 바꾸고, `prefix+l`로 그래프에 이동한 뒤 `q`로 닫을 수 있습니다.
+
+최소 표시 공간인 24열 × 8행에서도 `/ search`, `? help`, `q quit` 안내가 모두 보입니다. 도움말은 화면에 맞춰 줄바꿈되며 `↑↓`·`j/k`·`PgUp/PgDn`으로 스크롤하고 `Esc`·`?`·`q`로 닫습니다. 긴 검색어를 입력해도 입력 위치가 보입니다.
+
+### 전체 화면
+
+![브랜치 필터, 곡선 커밋 이력, 컬러 diff 상세 패널을 표시한 전체 데모 화면](docs/preview.png)
+
+*같은 데모 이력을 브랜치 목록·커밋 상세 패널과 함께 표시한 전체 화면입니다. 두 이미지는 앱의 Ratatui 화면과 곡선 렌더러에 `--theme classic`을 적용해 생성했습니다. [문자 모드 미리보기](docs/preview-text.svg).*
+
+브랜치별 이력을 살펴보거나 커밋 diff를 확인할 때는 새 탭으로 전체 그래프를 엽니다.
+
+```bash
+herdr plugin action invoke herdr.git-graph.open
+```
 
 특정 저장소를 직접 지정할 수도 있습니다.
 
@@ -81,19 +91,19 @@ description = "Open Git Graph Sidebar"
 
 ## 사용법
 
-브랜치를 선택하고 **Enter**를 누르면 해당 브랜치의 이력만 표시합니다. **All branches**를 선택하거나 **a**를 누르면 전체 이력으로 돌아갑니다. 커밋을 선택하면 아래 상세 패널에서 변경 내용을 확인할 수 있습니다.
+전체 화면에서 브랜치를 선택하고 **Enter**를 누르면 해당 브랜치의 이력만 표시합니다. **All branches**를 선택하거나 **a**를 누르면 전체 이력으로 돌아갑니다. 커밋을 선택하면 아래 상세 패널에서 변경 내용을 확인할 수 있습니다.
 
 | 키 | 동작 |
 | --- | --- |
-| `Tab` / `Shift-Tab` | 패널 전환 |
+| `Tab` / `Shift-Tab` | 전체 화면에서 패널 전환 |
 | `↑` `↓` / `j` `k` | 항목 이동 또는 diff 스크롤 |
-| `Enter` | 브랜치 필터 적용 / 상세 패널 이동 |
+| `Enter` | 검색 적용; 전체 화면에서는 브랜치 필터 적용 / 상세 패널 이동 |
 | `/`, `n` / `N` | 검색, 다음 / 이전 검색 결과 |
 | `a` | 전체 브랜치 보기 |
 | `r` | 로컬 이력 새로고침 |
-| `d` | 상세 패널 표시 / 숨기기 |
-| `?` | 전체 단축키 보기 |
-| `q` / `Ctrl-C` | 종료 |
+| `d` | 전체 화면에서 상세 패널 표시 / 숨기기 |
+| `?` | 스크롤 가능한 도움말 열기 / 닫기 |
+| `q` / `Ctrl-C` | 종료; 도움말이 열려 있으면 `q`는 도움말부터 닫기 |
 
 마우스 클릭으로 항목을 선택하고 포인터 아래 패널을 휠로 스크롤할 수 있습니다. 전체 단축키, 렌더러 설정, 문제 해결은 [상세 사용 안내](docs/USAGE.md)를 참고하세요.
 
@@ -110,6 +120,7 @@ git clone https://github.com/sjlee06/herdr-git-graph.git
 cd herdr-git-graph
 sh scripts/install.sh
 
+./bin/herdr-git-graph --demo --sidebar
 ./bin/herdr-git-graph --demo
 ./bin/herdr-git-graph --repo /path/to/repository
 ./bin/herdr-git-graph --repo /path/to/repository --sidebar

@@ -1,6 +1,6 @@
 # Herdr Git Graph
 
-**Explore Git branches, merges, and commit diffs without leaving Herdr.**
+**Keep Git history beside your code. Open the full view to inspect a diff.**
 
 [![CI](https://github.com/sjlee06/herdr-git-graph/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sjlee06/herdr-git-graph/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -8,14 +8,17 @@
 
 English · [한국어](README.ko.md)
 
-A read-only Git graph viewer built with Rust and Ratatui. Browse local and remote-tracking branches, follow merge history, search commits, and inspect diffs. Compatible Herdr panes display smooth curves; other terminals use a colored Unicode graph.
+A read-only Git graph viewer built with Rust and Ratatui. Keep a compact graph on the right while you work, follow branches and merges, and search commits without switching tabs. Open the full view for branch filters and commit diffs. Compatible Herdr panes display smooth curves; other terminals use a colored Unicode graph.
 
-![Herdr Git Graph: branches, curved commit graph, and commit inspector](docs/preview.png)
+<p align="center">
+  <img src="docs/preview-sidebar.png" width="360" alt="40-column Git Graph sidebar showing demo branches, merge curves, commit messages, and keyboard hints">
+</p>
 
-*Demo snapshot generated from the application's Ratatui layout and curve renderer. [Text-mode preview](docs/preview-text.svg).*
+*The sidebar in demo mode: a compact history graph beside your work. Generated at 40 columns with the classic theme; Herdr adds its own borders and scrollbar when opening a split.*
 
 ## Features
 
+- **Graph sidebar** — opens on the right at a default width of 40 columns and keeps focus on your current pane. Search, navigate, and follow local changes while you work.
 - **Branch and merge graph** — colored lanes, branch and tag labels, and support for detached HEAD and linked worktrees.
 - **Commit inspector** — commit metadata, changed-file statistics, and colored diffs in one view.
 - **Uncommitted changes** — a working tree node above HEAD, with staged/unstaged diffs, untracked file names, and conflict counts.
@@ -34,7 +37,23 @@ Prebuilt releases support **macOS 11+** and **Linux with glibc 2.35+** (for exam
 herdr plugin install sjlee06/herdr-git-graph
 ```
 
-From a Herdr workspace containing a Git repository, open the graph in a new tab:
+From a Herdr workspace containing a Git repository, open the sidebar beside your current pane:
+
+```bash
+herdr plugin action invoke herdr.git-graph.sidebar
+```
+
+The sidebar opens at **40 columns**, with room for `Uncommitted changes` next to the graph and for Herdr’s borders and scrollbar. Available space and Herdr’s split limits still apply. Drag the divider or use `prefix+r` to resize it; use `prefix+l` to focus it, then `q` to close.
+
+`/ search`, `? help`, and `q quit` remain visible at the minimum supported content size of 24 columns × 8 rows. Help wraps and scrolls with `↑↓`, `j/k`, or `PgUp/PgDn`; `Esc`, `?`, or `q` closes it. Long search input keeps the cursor visible.
+
+### Full view
+
+![Full demo view with branch filters, curved commit history, and a colored diff inspector](docs/preview.png)
+
+*The same demo history in the full view, with the branch list and commit inspector. Both previews use the application’s Ratatui layout and curve renderer with `--theme classic`. [Text-mode preview](docs/preview-text.svg).*
+
+Open the full graph in a new tab to filter branches and inspect changes:
 
 ```bash
 herdr plugin action invoke herdr.git-graph.open
@@ -70,31 +89,21 @@ description = "Open Git Graph Sidebar"
 
 `prefix+g` conflicts with Herdr's default `goto` action, and `prefix+shift+g` creates a worktree. Replace an existing graph binding on `prefix+g` with the example above. The `u` bindings are unused by Herdr defaults; choose others if your custom config already uses them. Run `herdr config check`, then `herdr server reload-config`. Press your prefix followed by `u` for the full view or `Shift+u` for the sidebar.
 
-### Graph sidebar
-
-```bash
-herdr plugin action invoke herdr.git-graph.sidebar
-```
-
-Opens a graph-only pane to the right of the current pane while keeping focus on your work. The sidebar shows the graph, commit subjects, hashes, and ref labels, with no branch list or diff inspector. It fits panes as small as 24 columns × 8 rows and supports search, keyboard navigation, and mouse scrolling.
-
-Drag the split divider or use Herdr's resize mode (`prefix+r`) to adjust the width. Use `prefix+l` to focus the graph and `q` inside it to close. For an existing terminal split, run `./bin/herdr-git-graph --sidebar --repo /path/to/repository`.
-
 ## Use
 
-Select a branch and press **Enter** to show its history. Choose **All branches**, or press **a**, to return to the complete view. Select a commit to inspect its details below.
+In the full view, select a branch and press **Enter** to show its history. Choose **All branches**, or press **a**, to return to the complete view. Select a commit to inspect its details below.
 
 | Key | Action |
 | --- | --- |
-| `Tab` / `Shift-Tab` | Switch panels |
+| `Tab` / `Shift-Tab` | Switch panels in the full view |
 | `↑` `↓` / `j` `k` | Navigate items or scroll the diff |
-| `Enter` | Apply a branch filter / focus the inspector |
+| `Enter` | Apply search; in the full view, apply a branch filter / focus the inspector |
 | `/`, then `n` / `N` | Search, then jump between matches |
 | `a` | Show all branches |
 | `r` | Reload local Git history |
-| `d` | Toggle the inspector |
-| `?` | Show all shortcuts |
-| `q` / `Ctrl-C` | Quit |
+| `d` | Toggle the inspector in the full view |
+| `?` | Open / close scrollable Help |
+| `q` / `Ctrl-C` | Quit; `q` closes Help first while it is open |
 
 Mouse clicks select items; the wheel scrolls the panel under the pointer. See the [usage guide](docs/USAGE.md) for all shortcuts, rendering options, and troubleshooting.
 
@@ -109,6 +118,7 @@ git clone https://github.com/sjlee06/herdr-git-graph.git
 cd herdr-git-graph
 sh scripts/install.sh
 
+./bin/herdr-git-graph --demo --sidebar
 ./bin/herdr-git-graph --demo
 ./bin/herdr-git-graph --repo /path/to/repository
 ```

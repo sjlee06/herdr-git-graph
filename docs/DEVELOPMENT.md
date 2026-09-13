@@ -87,15 +87,20 @@ The [CI workflow](../.github/workflows/ci.yml) runs on macOS and Linux. Tests co
 
 ## Preview assets
 
-Generate the UI from the Ratatui test backend and the same curve renderer used by the app:
+Generate the README images from built-in demo data using the Ratatui test backend and the app's curve renderer:
 
 ```bash
-cargo run -- --demo --renderer curves --snapshot docs/preview.svg
-cargo run -- --demo --renderer text --snapshot docs/preview-text.svg
-cargo run -- --demo --graph-png docs/curves.png
+./bin/herdr-git-graph --demo --sidebar --theme classic --renderer curves \
+  --width 40 --height 26 --snapshot docs/preview-sidebar.svg
+./bin/herdr-git-graph --demo --theme classic --renderer curves \
+  --width 140 --height 56 --snapshot docs/preview.svg
+./bin/herdr-git-graph --demo --theme classic --renderer text \
+  --width 140 --height 56 --snapshot docs/preview-text.svg
 ```
 
-The README's `docs/preview.png` is a rasterized copy of `preview.svg` for consistent GitHub display. Regenerate it with an SVG renderer supporting system fonts and embedded PNG images, such as [resvg](https://github.com/linebender/resvg). These are demo snapshots, not captures of a live Herdr window.
+Rasterize `preview-sidebar.svg` and `preview.svg` to PNG at 2× scale with an SVG renderer supporting system fonts and embedded PNG images, such as [resvg](https://github.com/linebender/resvg). The PNG sizes are 720 × 1040 and 2520 × 2240 pixels. The README leads with `docs/preview-sidebar.png` at a displayed width of 360 pixels; `docs/preview.png` illustrates the full view in its own section. The taller full-view snapshot includes the colored patch in the inspector.
+
+These are reproducible app-generated demo snapshots using `--theme classic`, not captures of a live Herdr window. The sidebar snapshot is a 40-column content area; a real 40-column Herdr split has less content space after host borders and the scrollbar. Actual theme colors follow the host terminal by default.
 
 ## Source layout
 

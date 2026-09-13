@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Clear, Paragraph},
+    widgets::{Block, BorderType, Clear, Paragraph, Wrap},
 };
 use std::{fmt::Write, path::Path};
 
@@ -66,6 +66,10 @@ pub fn draw(frame: &mut Frame, app: &mut App, smooth: bool) -> Option<Viewport> 
         );
         return None;
     }
+    if app.help {
+        help(frame, app, area);
+        return None;
+    }
     if app.sidebar {
         return sidebar(frame, app, area, smooth);
     }
@@ -77,16 +81,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, smooth: bool) -> Option<Viewport> 
     ])
     .split(area);
     header(frame, app, rows[0]);
-    let query = if app.searching {
-        format!(" / {}▏", clean(&app.query))
-    } else if !app.query.is_empty() {
-        format!(" / {}  ·  n / N to jump", clean(&app.query))
-    } else {
-        " / Search commits, authors, refs or hashes".into()
-    };
     let toolbar = Layout::horizontal([Constraint::Min(20), Constraint::Length(28)]).split(rows[1]);
     frame.render_widget(
-        Paragraph::new(query).style(if app.searching {
+        Paragraph::new(search_prompt(app, toolbar[0].width)).style(if app.searching {
             Style::default().fg(theme.accent())
         } else {
             theme.muted()
@@ -133,51 +130,11 @@ pub fn draw(frame: &mut Frame, app: &mut App, smooth: bool) -> Option<Viewport> 
         details(frame, app, main_rows[1]);
     }
     footer(frame, app, rows[3]);
-    if app.help {
-        let width = 61.min(area.width - 2);
-        let height = 19.min(area.height - 2);
-        let modal = Rect::new(
-            (area.width - width) / 2,
-            (area.height - height) / 2,
-            width,
-            height,
-        );
-        frame.render_widget(Clear, modal);
-        let help = "\n  Tab / Shift-Tab    Move between panels\n  ↑ ↓  /  j k         Select commit or branch\n  Enter               Open details / apply branch filter\n  PgUp / PgDn         Move one page\n  Home / End  ·  g G   First / last item\n  h / l               Pan graph / scroll diff horizontally\n  /                   Search loaded history\n  n / N               Next / previous search match\n  a                   Show all refs\n  r                   Reload local repository\n  d                   Toggle details\n  Mouse               Click to select · wheel to scroll\n  q / Ctrl-C          Quit\n\n  Search highlights history without removing graph nodes.\n  Esc or ? closes this help.";
-        frame.render_widget(
-            Paragraph::new(help)
-                .style(Style::default().fg(theme.fg()).bg(theme.panel()))
-                .block(block(theme, "Keyboard shortcuts", true)),
-            modal,
-        );
-        return None;
-    }
     view
 }
 
 fn sidebar(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option<Viewport> {
     let theme = app.theme;
-    if app.help {
-        frame.render_widget(
-            Paragraph::new(
-                vec![
-                    "↑↓ j/k move · g/G ends",
-                    "PgUp/Dn page · h/l pan",
-                    "/ search · n/N next/prev",
-                    "r reload · a all refs",
-                    "Mouse select / scroll",
-                    "Esc / ? / q close help",
-                ]
-                .into_iter()
-                .map(Line::from)
-                .collect::<Vec<_>>(),
-            )
-            .style(Style::default().fg(theme.fg()).bg(theme.panel()))
-            .block(block(theme, "Help", true)),
-            area,
-        );
-        return None;
-    }
     let rows = Layout::vertical([
         Constraint::Length(2),
         Constraint::Min(4),
@@ -206,32 +163,30 @@ fn sidebar(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
     );
     let view = history(frame, app, rows[1], smooth);
     let count = app.repo.commits.len();
-    let status = if app.searching {
-        format!("/ {}▏", clean(&app.query))
-    } else if !app.query.is_empty() {
-        format!("/ {} · {}", clean(&app.query), clean(&app.status))
+    let status = if app.searching || !app.query.is_empty() {
+        search_prompt(app, rows[2].width)
     } else {
-        format!(
-            "{}/{}{} · {}",
-            if count == 0 { 0 } else { app.selected + 1 },
-            count,
-            if app.repo.commit_count() == app.limit {
-                " (limit)"
-            } else {
-                ""
-            },
-            clean(&app.status),
+        elide(
+            &format!(
+                "{}/{}{} · {}",
+                if count == 0 { 0 } else { app.selected + 1 },
+                count,
+                if app.repo.commit_count() == app.limit {
+                    " (limit)"
+                } else {
+                    ""
+                },
+                clean(&app.status),
+            ),
+            rows[2].width,
+            false,
         )
     };
     frame.render_widget(
         Paragraph::new(vec![
             Line::styled(status, theme.muted()),
             Line::styled(
-                if app.searching {
-                    "Enter apply · Esc clear"
-                } else {
-                    "↑↓ move / find ? help q"
-                },
+                key_hints(app, rows[2].width),
                 Style::default().fg(theme.accent()).bg(theme.panel()),
             ),
         ]),
@@ -336,14 +291,11 @@ fn branches(frame: &mut Frame, app: &mut App, area: Rect) {
         let foot = Rect::new(inner.x, inner.bottom() - 2, inner.width, 2);
         frame.render_widget(
             Paragraph::new(vec![
-                Line::from(format!(
-                    " {} refs · Enter to apply",
-                    app.repo.branches.len()
-                )),
+                Line::from(format!(" {} refs · Enter apply", app.repo.branches.len())),
                 Line::from(if app.refresh_interval.is_some() {
-                    " Live updates · r to reload"
+                    " Live · r reload"
                 } else {
-                    " Local history · r to reload"
+                    " Local · r reload"
                 }),
             ])
             .style(theme.muted()),
@@ -423,7 +375,8 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
             } else {
                 "\n No commits or changes yet.\n Make a change, then press r."
             })
-            .style(theme.muted()),
+            .style(theme.muted())
+            .wrap(Wrap { trim: true }),
             body,
         );
         return None;
@@ -644,9 +597,18 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
         )
     };
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(area);
-    let cols = Layout::horizontal([Constraint::Min(10), Constraint::Length(32)]).split(rows[0]);
+    let cols = Layout::horizontal([
+        Constraint::Min(10),
+        Constraint::Length((Line::raw(&range).width() + 1) as u16),
+    ])
+    .split(rows[0]);
     frame.render_widget(
-        Paragraph::new(format!(" {}", clean(&app.status))).style(theme.muted()),
+        Paragraph::new(elide(
+            &format!(" {}", clean(&app.status)),
+            cols[0].width,
+            false,
+        ))
+        .style(theme.muted()),
         cols[0],
     );
     frame.render_widget(
@@ -655,14 +617,192 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
             .style(theme.muted()),
         cols[1],
     );
-    let keys = if app.searching {
-        " Enter apply   Esc clear"
-    } else {
-        " Tab panels   ↑↓ navigate   / search   a all   r reload   d details   ? help   q quit"
-    };
     frame.render_widget(
-        Paragraph::new(keys).style(Style::default().bg(theme.panel()).fg(theme.accent())),
+        Paragraph::new(key_hints(app, rows[1].width))
+            .style(Style::default().bg(theme.panel()).fg(theme.accent())),
         rows[1],
+    );
+}
+
+// Keep complete key/action pairs; the essential hints fit even at 24 columns.
+fn key_hints(app: &App, width: u16) -> String {
+    if app.searching {
+        return "Enter apply · Esc clear".into();
+    }
+    let mut hints = vec!["/ search", "? help", "q quit"];
+    let extras: &[&str] = if app.sidebar {
+        &["↑↓ move", "r reload", "n/N matches", "h/l pan"]
+    } else {
+        &[
+            "Tab panels",
+            "↑↓ move",
+            "d details",
+            "r reload",
+            "a all",
+            "n/N matches",
+        ]
+    };
+    for extra in extras {
+        if Line::raw(hints.join("  ")).width() + 2 + Line::raw(*extra).width() <= usize::from(width)
+        {
+            hints.push(extra);
+        }
+    }
+    hints.join("  ")
+}
+
+fn elide(text: &str, width: u16, keep_end: bool) -> String {
+    let line = Line::raw(text);
+    if line.width() <= usize::from(width) {
+        return text.into();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut graphemes: Vec<_> = line.styled_graphemes(Style::default()).collect();
+    if keep_end {
+        graphemes.reverse();
+    }
+    let mut used = 1; // Reserve an ellipsis, never half a wide character.
+    let mut visible = Vec::new();
+    for grapheme in graphemes {
+        used += Span::raw(grapheme.symbol).width();
+        if used > usize::from(width) {
+            break;
+        }
+        visible.push(grapheme.symbol);
+    }
+    if keep_end {
+        visible.reverse();
+        format!("…{}", visible.concat())
+    } else {
+        format!("{}…", visible.concat())
+    }
+}
+
+fn search_prompt(app: &App, width: u16) -> String {
+    if app.searching {
+        format!(
+            "/ {}",
+            elide(
+                &format!("{}▏", clean(&app.query)),
+                width.saturating_sub(2),
+                true
+            )
+        )
+    } else if !app.query.is_empty() {
+        let hint = if app.status.starts_with("No matching") {
+            " · no match"
+        } else {
+            " · n/N jump"
+        };
+        let available = width.saturating_sub(2 + Line::raw(hint).width() as u16);
+        format!("/ {}{hint}", elide(&clean(&app.query), available, false))
+    } else if width >= 43 {
+        "/ Search commits, authors, refs or hashes".into()
+    } else {
+        "/ Search history".into()
+    }
+}
+
+fn help(frame: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+    let mut entries = vec![
+        "↑↓ / j k: Move / scroll",
+        "PgUp / PgDn: Page",
+        "Home / g: First item",
+        "End / G: Last item",
+        "←→ / h l: Pan graph",
+        "/: Search history",
+        "n / N: Next / previous match",
+        "Enter in search: Apply",
+        "Esc: Clear search",
+        "r: Reload repository",
+        "a: Show all refs",
+        "Mouse: Select / scroll",
+        "q: Quit graph",
+        "Ctrl-C: Quit anytime",
+    ];
+    if !app.sidebar {
+        entries.extend([
+            "Tab / Shift-Tab: Next / previous panel",
+            "Enter in branches: Apply filter",
+            "Enter in history: Open details",
+            "d: Toggle details",
+            "←→ / h l in details: Scroll diff",
+        ]);
+    }
+    entries.extend([
+        "Search covers loaded history and keeps graph nodes visible.",
+        "In help: ↑↓ / j k scroll; PgUp / PgDn page; Home / End jump.",
+    ]);
+    let width = if app.sidebar {
+        area.width
+    } else {
+        64.min(area.width - 2)
+    };
+    let content_width = usize::from(width.saturating_sub(2)).max(1);
+    let mut lines = Vec::new();
+    for entry in entries {
+        let mut line = String::new();
+        for word in entry.split_whitespace() {
+            if !line.is_empty()
+                && Line::raw(&line).width() + 1 + Line::raw(word).width() > content_width
+            {
+                lines.push(Line::raw(std::mem::take(&mut line)));
+            }
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(word);
+        }
+        lines.push(Line::raw(line));
+    }
+    let height = if app.sidebar {
+        area.height
+    } else {
+        (lines.len() as u16 + 4).min(area.height - 2)
+    };
+    let modal = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+    let border = block(
+        theme,
+        if app.sidebar {
+            "Help"
+        } else {
+            "Keyboard shortcuts"
+        },
+        true,
+    );
+    let inner = border.inner(modal);
+    frame.render_widget(Clear, modal);
+    frame.render_widget(
+        border.style(Style::default().fg(theme.fg()).bg(theme.panel())),
+        modal,
+    );
+    let rows = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+    app.help_page_size = usize::from(rows[0].height);
+    app.help_scroll = app
+        .help_scroll
+        .min(lines.len().saturating_sub(app.help_page_size));
+    let progress = format!("↑↓ scroll  {}/{}", app.help_scroll + 1, lines.len());
+    frame.render_widget(
+        Paragraph::new(lines).scroll((app.help_scroll as u16, 0)),
+        rows[0],
+    );
+    frame.render_widget(Paragraph::new(progress).style(theme.muted()), rows[1]);
+    frame.render_widget(
+        Paragraph::new("Esc/?/q close help").style(Style::default().fg(theme.accent())),
+        rows[2],
     );
 }
 
@@ -757,6 +897,116 @@ fn xml(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn screen(app: &mut App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(frame, app, false);
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .chunks(usize::from(width))
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn essential_hints_and_search_cursor_fit_supported_widths() {
+        for sidebar in [false, true] {
+            let mut app = App::new(crate::git::demo(), 2000, true).with_sidebar(sidebar);
+            for width in (if sidebar { 24 } else { 64 })..=150 {
+                let height = if sidebar { 8 } else { 18 };
+                let lines = screen(&mut app, width, height);
+                let footer = lines.last().unwrap();
+                for hint in ["/ search", "? help", "q quit"] {
+                    assert!(footer.contains(hint), "{width}: {footer}");
+                }
+                assert!(Line::raw(key_hints(&app, width)).width() <= usize::from(width));
+                app.query = "긴 검색어와 e\u{301} 👩‍💻 한글을 반복해서 입력합니다".repeat(10);
+                app.searching = true;
+                let lines = screen(&mut app, width, height);
+                let query = &lines[if sidebar { usize::from(height) - 2 } else { 3 }];
+                assert!(query.contains("/ …") && query.contains('▏'), "{query}");
+                assert!(lines.last().unwrap().contains("Enter apply · Esc clear"));
+                app.searching = false;
+                let lines = screen(&mut app, width, height);
+                assert!(lines.iter().any(|line| line.contains("n/N jump")));
+                app.query.clear();
+            }
+        }
+    }
+
+    #[test]
+    fn short_help_scrolls_to_every_instruction_and_keeps_close_visible() {
+        for (sidebar, width, height) in [
+            (true, 24, 8),
+            (true, 26, 12),
+            (false, 64, 18),
+            (false, 140, 44),
+        ] {
+            let mut app = App::new(crate::git::demo(), 2000, true).with_sidebar(sidebar);
+            let press =
+                |app: &mut App, code| app.key(KeyEvent::new(code, KeyModifiers::NONE), None);
+            press(&mut app, KeyCode::Char('?'));
+            let mut visible = String::new();
+            loop {
+                let lines = screen(&mut app, width, height);
+                let page = lines.join("\n");
+                assert!(page.contains("Esc/?/q close help"), "{page}");
+                assert!(page.contains("↑↓ scroll"));
+                assert_eq!(app.history_area, Rect::default());
+                visible.push_str(&page);
+                let before = app.help_scroll;
+                press(&mut app, KeyCode::PageDown);
+                screen(&mut app, width, height);
+                if app.help_scroll == before {
+                    break;
+                }
+            }
+            for instruction in [
+                "PgUp / PgDn",
+                "Home / g",
+                "End / G",
+                "n / N",
+                "Enter in search",
+                "Esc: Clear search",
+                "r: Reload",
+                "a: Show all refs",
+                "Mouse:",
+                "q: Quit graph",
+                "Ctrl-C:",
+                "nodes visible.",
+                "In help:",
+            ] {
+                assert!(
+                    visible.contains(instruction),
+                    "missing {instruction} at {width}x{height}: {visible}"
+                );
+            }
+            assert_eq!(visible.contains("Toggle details"), !sidebar);
+            press(&mut app, KeyCode::Home);
+            assert_eq!(app.help_scroll, 0);
+            press(&mut app, KeyCode::End);
+            screen(&mut app, width, height);
+            press(&mut app, KeyCode::PageUp);
+            assert_ne!(app.help_scroll, usize::MAX);
+            press(&mut app, KeyCode::Char('q'));
+            assert!(!app.help && !app.quit);
+            assert_eq!(app.selected, 0);
+            press(&mut app, KeyCode::Char('?'));
+            assert_eq!(app.help_scroll, 0);
+            app.key(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                None,
+            );
+            assert!(app.quit);
+        }
+    }
 
     #[test]
     fn terminal_theme_keeps_panel_defaults_and_a_visible_selection_without_queries() {

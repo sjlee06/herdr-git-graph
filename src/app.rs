@@ -145,6 +145,8 @@ pub struct App {
     pub query: String,
     pub searching: bool,
     pub help: bool,
+    pub help_scroll: usize,
+    pub help_page_size: usize,
     pub show_details: bool,
     pub sidebar: bool,
     pub detail: String,
@@ -185,6 +187,8 @@ impl App {
             query: String::new(),
             searching: false,
             help: false,
+            help_scroll: 0,
+            help_page_size: 1,
             show_details: true,
             sidebar: false,
             detail: String::new(),
@@ -502,11 +506,23 @@ impl App {
             return;
         }
         if self.help {
-            if matches!(
-                key.code,
-                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q')
-            ) {
-                self.help = false;
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => self.help = false,
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.help_scroll = self.help_scroll.saturating_add(1)
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.help_scroll = self.help_scroll.saturating_sub(1)
+                }
+                KeyCode::PageDown => {
+                    self.help_scroll = self.help_scroll.saturating_add(self.help_page_size)
+                }
+                KeyCode::PageUp => {
+                    self.help_scroll = self.help_scroll.saturating_sub(self.help_page_size)
+                }
+                KeyCode::Home | KeyCode::Char('g') => self.help_scroll = 0,
+                KeyCode::End | KeyCode::Char('G') => self.help_scroll = usize::MAX,
+                _ => {}
             }
             return;
         }
@@ -534,7 +550,10 @@ impl App {
         }
         match key.code {
             KeyCode::Char('q') => self.quit = true,
-            KeyCode::Char('?') => self.help = true,
+            KeyCode::Char('?') => {
+                self.help = true;
+                self.help_scroll = 0;
+            }
             KeyCode::Tab | KeyCode::BackTab | KeyCode::Enter | KeyCode::Char('d')
                 if self.sidebar => {}
             KeyCode::Tab => {
