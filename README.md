@@ -11,10 +11,10 @@ English · [한국어](README.ko.md)
 A read-only Git graph viewer built with Rust and Ratatui. Keep a compact graph on the right while you work, follow branches and merges, and search commits without switching tabs. Open the full view for branch filters and commit diffs. Compatible Herdr panes display smooth curves; other terminals use a colored Unicode graph.
 
 <p align="center">
-  <img src="docs/preview-sidebar.png" width="360" alt="40-column Git Graph sidebar showing demo branches, merge curves, commit messages, and keyboard hints">
+  <img src="docs/preview-sidebar.png" width="1600" alt="Full Herdr terminal with workspace navigation on the left, Rust source and tests in the center, and a 40-column Git Graph demo sidebar on the right">
 </p>
 
-*The sidebar in demo mode: a compact history graph beside your work. Generated at 40 columns with the classic theme; Herdr adds its own borders and scrollbar when opening a split.*
+*A full Herdr workspace: application source and tests in the center, with the Git Graph demo in a 40-column split on the right. The graph uses the classic theme and the same sample history as the full view below.*
 
 ## Features
 

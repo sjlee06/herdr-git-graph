@@ -87,20 +87,29 @@ The [CI workflow](../.github/workflows/ci.yml) runs on macOS and Linux. Tests co
 
 ## Preview assets
 
-Generate the README images from built-in demo data using the Ratatui test backend and the app's curve renderer:
+The README leads with `docs/preview-sidebar.png`, a full Herdr terminal showing workspace navigation, source code, a test terminal, and the graph sidebar together. It is rendered from the actual ANSI output and Kitty graphics frames of an isolated Herdr demo session. The editor shows the unmodified `stroke` function in `src/graphics.rs`; the terminal shows a successful `cargo test --lib graph::tests` run. The graph uses built-in sample history with `--demo --sidebar --theme classic --renderer curves`.
+
+The scene uses a 160-column × 42-row terminal, a 24-column Herdr workspace list, and a 40-column graph split including the host borders and scrollbar. The remaining 96 columns are split vertically between the editor and test terminal. `docs/preview-sidebar.svg` is 1600 × 840 pixels; its 2× PNG is 3200 × 1680 pixels and fills the available README width.
+
+Generate the separate full-view and text-mode previews from the same built-in data using the Ratatui test backend and the app's curve renderer:
 
 ```bash
-./bin/herdr-git-graph --demo --sidebar --theme classic --renderer curves \
-  --width 40 --height 26 --snapshot docs/preview-sidebar.svg
 ./bin/herdr-git-graph --demo --theme classic --renderer curves \
   --width 140 --height 56 --snapshot docs/preview.svg
 ./bin/herdr-git-graph --demo --theme classic --renderer text \
   --width 140 --height 56 --snapshot docs/preview-text.svg
 ```
 
-Rasterize `preview-sidebar.svg` and `preview.svg` to PNG at 2× scale with an SVG renderer supporting system fonts and embedded PNG images, such as [resvg](https://github.com/linebender/resvg). The PNG sizes are 720 × 1040 and 2520 × 2240 pixels. The README leads with `docs/preview-sidebar.png` at a displayed width of 360 pixels; `docs/preview.png` illustrates the full view in its own section. The taller full-view snapshot includes the colored patch in the inspector.
+Rasterize `preview.svg` to `preview.png` at 2× scale with an SVG renderer supporting system fonts and embedded PNG images, such as [resvg](https://github.com/linebender/resvg). The full-view PNG is 2520 × 2240 pixels and includes the colored patch in the inspector.
 
-These are reproducible app-generated demo snapshots using `--theme classic`, not captures of a live Herdr window. The sidebar snapshot is a 40-column content area; a real 40-column Herdr split has less content space after host borders and the scrollbar. Actual theme colors follow the host terminal by default.
+For a standalone sidebar layout check, export to a temporary path so it does not replace the full-terminal README image:
+
+```bash
+./bin/herdr-git-graph --demo --sidebar --theme classic --renderer curves \
+  --width 40 --height 26 --snapshot /tmp/herdr-git-graph-sidebar.svg
+```
+
+This standalone export has a 40-column content area; the full-terminal image uses a real 40-column Herdr split with less content space after host borders and the scrollbar. Actual theme colors follow the host terminal by default.
 
 ## Source layout
 
