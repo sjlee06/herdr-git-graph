@@ -2,6 +2,8 @@
 
 [Back to README](../README.md)
 
+The viewer is built with Rust and Ratatui.
+
 ## Build and link locally
 
 Source builds require Rust stable with Cargo on `PATH`, Git, and a macOS or Linux environment. Install Rust with [rustup](https://rustup.rs/) if needed. End-user installation uses `scripts/install.sh` and requires no Rust toolchain.
@@ -84,6 +86,8 @@ The Python smoke tests use only the standard library. Keep the work path short: 
 When Herdr is installed, also run `python3 tests/herdr_live.py` after building. It starts a separate headless test session with isolated XDG directories, invokes the real sidebar and full-view actions, checks the resulting panes and graph output, and stops only its own test server. Run this when changing plugin launch arguments; a mock CLI does not enforce Herdr's placement rules.
 
 The [CI workflow](../.github/workflows/ci.yml) runs on macOS and Linux. Tests cover graph topology, real temporary Git repositories, branch filters, empty commits, detached HEAD, linked worktrees, shallow clones, Unicode search, and external-diff suppression. Working tree tests include partial staging, untracked/ignored files, renames, deletions, conflicts, unborn HEAD, bounded patches, and index preservation. Refresh tests check unchanged-status edits, selection/scroll preservation, stale responses, single pending polls, and backoff. PTY tests exercise live edits and commits without manual reload, auto-refresh opt-out, navigation, resize, termination cleanup, graphics transport, and text fallback with a mock Herdr server.
+
+See [validation notes](VALIDATION.md) for recorded results and live terminal testing coverage.
 
 ## Preview assets
 

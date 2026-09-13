@@ -106,6 +106,8 @@ Headless `--snapshot` and `--graph-png` exports cannot query the user's terminal
 
 ## Renderers
 
+[Text-mode preview](preview-text.svg).
+
 ```bash
 ./bin/herdr-git-graph --renderer auto
 ./bin/herdr-git-graph --renderer text
@@ -126,6 +128,16 @@ See [validation notes](VALIDATION.md) for the distinction between automated rend
 
 An explicit `--repo /path/to/repository` takes precedence. A plugin action passes its selected repository to the new pane. Otherwise the app checks the working directory and available Herdr context, including the source pane directory, linked worktree checkout, and workspace directory.
 
+To open a specific repository in a Herdr tab:
+
+```bash
+herdr plugin pane open \
+  --plugin herdr.git-graph \
+  --entrypoint graph \
+  --cwd /path/to/repository \
+  --focus
+```
+
 Detached HEAD commits are included in the all-refs view. A shallow clone only shows history available locally.
 
 ```bash
@@ -137,6 +149,21 @@ The default limit is 2,000 commits; accepted values range from 1 to 50,000. Sear
 Press `r` to immediately reread local refs, history, and working tree changes. Obtain new remote commits with your existing Git workflow; automatic refresh picks up the resulting local changes. This version does not provide Git writes, GitHub PR data, or automatic fetch.
 
 Git subprocesses have a 15-second timeout, and each patch preview is capped at 512 KiB (separately for staged and unstaged changes). Pagers, external diff programs, and textconv are disabled. Repository reloads and detail reads run in a background worker; the first load occurs before the TUI opens.
+
+## Run without Herdr
+
+Download the release binary and open a repository in your terminal:
+
+```bash
+git clone https://github.com/sjlee06/herdr-git-graph.git
+cd herdr-git-graph
+sh scripts/install.sh
+
+./bin/herdr-git-graph --repo /path/to/repository
+./bin/herdr-git-graph --repo /path/to/repository --sidebar
+```
+
+Use `--demo` instead of `--repo /path/to/repository` to try sample history. Standalone mode uses the Unicode graph; pixel curves require a compatible Herdr pane and outer terminal. See [renderers](#renderers) for details.
 
 ## Troubleshooting
 
