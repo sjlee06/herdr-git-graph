@@ -1,9 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind},
-    execute,
-};
+use crossterm::event::{self, Event, KeyEventKind};
 use herdr_git_graph::{
     app::{App, Worker},
     git,
@@ -22,6 +19,8 @@ use std::{
     },
     time::Duration,
 };
+
+mod terminal;
 
 #[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
 enum Renderer {
@@ -82,14 +81,6 @@ struct Args {
     /// Height of a headless screen snapshot
     #[arg(long, default_value_t = 44, value_parser = clap::value_parser!(u16).range(8..=120))]
     height: u16,
-}
-
-struct TerminalGuard;
-impl Drop for TerminalGuard {
-    fn drop(&mut self) {
-        let _ = execute!(io::stdout(), DisableMouseCapture);
-        ratatui::restore();
-    }
 }
 
 fn main() -> Result<()> {
@@ -180,15 +171,8 @@ fn main() -> Result<()> {
     ] {
         signal_hook::flag::register(signal, stop.clone())?;
     }
-    let mut terminal = ratatui::try_init().context("터미널 초기화 실패")?;
-    let _guard = TerminalGuard;
-    execute!(io::stdout(), EnableMouseCapture)?;
-    let old_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = execute!(io::stdout(), DisableMouseCapture);
-        ratatui::restore();
-        old_hook(info);
-    }));
+    let mut session = terminal::TerminalSession::start().context("터미널 초기화 실패")?;
+    let terminal = session.terminal();
     let mut probe = (args.theme == ThemeMode::Auto).then(ThemeProbe::default);
     if let Some(probe) = &probe {
         probe.query()?;
@@ -255,11 +239,22 @@ fn main() -> Result<()> {
         }
         let previous_theme = app.theme;
         let input = if let Some(probe) = &mut probe {
-            probe.read(Duration::from_millis(40), &mut app.theme)?
-        } else if event::poll(Duration::from_millis(40))? {
-            Some(event::read()?)
+            probe.read(Duration::from_millis(40), &mut app.theme)
         } else {
-            None
+            event::poll(Duration::from_millis(40)).and_then(|ready| {
+                if ready {
+                    event::read().map(Some)
+                } else {
+                    Ok(None)
+                }
+            })
+        };
+        let input = match input {
+            Ok(input) => input,
+            // A closed pane has no more input. Leave through the normal cleanup
+            // path so the graphics stream and terminal guard are also dropped.
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(error) => return Err(error).context("터미널 입력 실패"),
         };
         dirty |= previous_theme != app.theme;
         if let Some(input) = input {

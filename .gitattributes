@@ -1,0 +1,2 @@
+# Preserve the published dependency's CRLF and upstream whitespace.
+vendor/crossterm/** linguist-vendored=true -whitespace

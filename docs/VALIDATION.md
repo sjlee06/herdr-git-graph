@@ -64,6 +64,19 @@
 - 샘플 밝은/어두운 팔레트를 주입한 전체 화면·사이드바 SVG를 PNG로 렌더링해 시각 검토. 사용자 터미널의 실제 화면 캡처는 아님.
 - `scripts/build.sh --debug`로 디버깅 심볼을 포함한 로컬 실행 파일을 생성하고, 별도 Herdr 세션에서 탭·사이드바 실행 확인.
 
+## 터미널 연결 종료 수정 검증
+
+2026-09-15 macOS Apple Silicon에서 검증했습니다.
+
+- 수정 전 릴리스에서 PTY 연결 종료 후 CPU 약 96%, SIGTERM에 응답하지 않는 상태를 재현. 새 연결 종료 테스트가 기존 실행 파일에서 실패하는 것 확인.
+- Crossterm 0.29.0의 Unix 입력 읽기가 EOF와 재시도할 수 없는 오류를 반환하도록 로컬 패치. 패치 범위와 원본 정보는 [vendor/README.md](../vendor/README.md)에 기록.
+- 닫힌 stdout/stderr에 터미널 복구 오류를 출력하다가 다시 panic하는 경로를 제거. 입력 오류 및 정상 종료 모두 터미널 세션과 그래픽 스트림을 정리.
+- 수정된 릴리스의 5초 유휴 CPU 약 0.2%, PTY 연결 종료 후 약 1ms 안에 종료 코드 0으로 종료하는 것 확인. 이 값은 해당 로컬 측정 결과이며 성능 보장치는 아님.
+- `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, Rust 테스트 47개 통과.
+- 전체 `tests/smoke.py` 통과: auto/terminal/classic 테마, 미완성 OSC 응답 중 연결 종료, 곡선 스트림 해제, 실제 저장소 worker 종료, SIGTERM/SIGHUP/SIGINT 복구 및 기존 탐색·검색·테마·자동 갱신 동작 검증.
+- 별도 XDG 폴더와 서버를 사용하는 `tests/herdr_live.py` 통과. 실제 Herdr의 사이드바·중첩 분할·전체 보기·테마 응답 확인.
+- `scripts/build.sh --release`로 로컬 실행 파일을 갱신하고 `bin/herdr-git-graph`와 릴리스 빌드의 SHA-256 일치 확인.
+
 ## 미검증 범위
 
 - 실제 Herdr 창과 바깥 터미널 조합에서의 픽셀 표시·스크롤 프레임률·원격 연결

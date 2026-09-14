@@ -1,6 +1,6 @@
 [package]
 name = "herdr-git-graph"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2024"
 description = "Interactive Git commit and branch graph for Herdr"
 license = "MIT"
@@ -20,6 +20,10 @@ signal-hook = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
+
+[patch.crates-io]
+# Keep terminal EOF/error handling fixed for both our input and Ratatui's backend.
+crossterm = { path = "vendor/crossterm" }
 
 [profile.release]
 lto = "thin"

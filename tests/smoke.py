@@ -147,9 +147,9 @@ class Terminal:
             self.pump(0.1)
         assert b"GIT GRAPH" in self.output, repr(bytes(self.output))
 
-    def finish(self, terminate=False):
-        if terminate:
-            self.process.send_signal(signal.SIGTERM)
+    def finish(self, stop_signal=None):
+        if stop_signal is not None:
+            self.process.send_signal(stop_signal)
         else:
             self.send("q")
         deadline = time.monotonic() + 4
@@ -168,6 +168,23 @@ class Terminal:
                 self.process.wait()
             os.close(self.master)
             os.close(self.slave)
+
+    def hangup(self):
+        # Model the host disappearing without sending q or any signal. In
+        # particular, a start_new_session child need not receive SIGHUP here.
+        os.close(self.master)
+        os.close(self.slave)
+        started = time.monotonic()
+        try:
+            self.process.wait(timeout=2)
+            assert self.process.returncode == 0, (
+                f"PTY disconnect exited with {self.process.returncode}"
+            )
+            return time.monotonic() - started
+        except subprocess.TimeoutExpired:
+            raise AssertionError("PTY disconnect left the process running") from None
+        finally:
+            self.abort()
 
 
 class MockHerdr:
@@ -237,6 +254,38 @@ class MockHerdr:
         self.thread.join(timeout=1)
 
 
+def check_disconnects(binary, work):
+    for mode, fragment in [("auto", b""), ("auto", b"\x1b]11;rgb:12"),
+                           ("terminal", b""), ("classic", b"")]:
+        terminal = Terminal(binary, ["--renderer", "text", "--theme", mode])
+        terminal.ready()
+        terminal.pump(0.1)
+        if fragment:
+            os.write(terminal.master, fragment)
+            terminal.pump(0.1)
+        elapsed = terminal.hangup()
+        print(f"PASS: PTY disconnect exits in {elapsed:.3f}s ({mode}, partial OSC={bool(fragment)})")
+
+    with tempfile.TemporaryDirectory(prefix="hangup-", dir=work) as temporary:
+        mock = MockHerdr(Path(temporary) / "s")
+        terminal = Terminal(binary, ["--renderer", "curves", "--theme", "classic"],
+                            {"HERDR_SOCKET_PATH": str(mock.path), "HERDR_PANE_ID": "w-test:p-test"})
+        try:
+            terminal.ready()
+            terminal.pump(0.1)
+            assert mock.frames, "Graphics stream was not opened"
+            terminal.hangup()
+            deadline = time.monotonic() + 2
+            while mock.closed == 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert mock.closed == 1, "PTY disconnect left a graphics stream open"
+            assert not mock.errors, mock.errors
+        finally:
+            terminal.abort()
+            mock.close()
+        print("PASS: PTY disconnect closes the owned graphics stream")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("binary", type=Path)
@@ -244,6 +293,7 @@ def main():
     args = parser.parse_args()
     binary = args.binary.resolve()
     args.work.mkdir(parents=True, exist_ok=True)
+    check_disconnects(binary, args.work)
     terminal = Terminal(binary, ["--renderer", "text"])
     terminal.ready()
     for keys in ["jj", "G", "g", "/한글\r", "n", "\x1b", "\t", "jj", "d", "d", "?", "\x1b"]:
@@ -255,10 +305,11 @@ def main():
     terminal.finish()
     print("PASS: PTY navigation, Unicode search, help, resize, terminal restoration")
 
-    terminal = Terminal(binary, ["--renderer", "text"])
-    terminal.ready()
-    terminal.finish(terminate=True)
-    print("PASS: SIGTERM restores terminal and mouse state")
+    for stop_signal in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        terminal = Terminal(binary, ["--renderer", "text"])
+        terminal.ready()
+        terminal.finish(stop_signal=stop_signal)
+    print("PASS: SIGTERM/SIGHUP/SIGINT restore terminal and mouse state")
 
     terminal = Terminal(binary, ["--sidebar", "--renderer", "text"], size=(40, 24))
     terminal.ready()
@@ -365,6 +416,12 @@ def main():
         wait_for(b"Uncommitted changes")
         terminal.finish()
         print("PASS: auto-refresh opt-out and manual sidebar reload")
+
+        terminal = Terminal(binary, ["--repo", str(repo), "--sidebar", "--renderer", "text"], demo=False)
+        terminal.ready()
+        terminal.pump(0.1)
+        terminal.hangup()
+        print("PASS: live repository worker does not keep a disconnected pane alive")
 
     with tempfile.TemporaryDirectory(prefix="rpc-", dir=args.work) as temporary:
         # UNIX socket paths have a small platform-specific maximum length.
