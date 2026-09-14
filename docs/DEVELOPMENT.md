@@ -27,7 +27,7 @@ For faster local builds with debug symbols, use `sh scripts/build.sh --debug`. T
 ./bin/herdr-git-graph --repo /path/to/repository --check
 ```
 
-`--demo` uses built-in sample data. `--check` summarizes the repository without opening a TUI. On macOS, `Demo.command` opens the sample view, downloading the matching release first if the executable is missing.
+`--demo` uses built-in sample data. `--check` summarizes the repository without opening a TUI.
 
 ## main 푸시 전 로컬 디버깅
 
