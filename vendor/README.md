@@ -1,8 +1,11 @@
 # Crossterm terminal disconnect patch
 
-`crossterm/` contains the source, examples, manifest, README and MIT license from
-the published `crossterm` 0.29.0 crate. Other upstream documentation and development
-files are omitted. The examples are retained because the manifest lists them.
+`crossterm/` contains the source, manifest and MIT license from the published
+`crossterm` 0.29.0 crate. Upstream examples, README, other documentation and
+development files are omitted. The manifest disables the README and removes
+example targets and the four dependencies used only by those examples
+(`async-std`, `futures`, `futures-timer`, `tokio`). Dependencies used by upstream
+source tests are retained.
 Upstream line endings and whitespace are preserved; `.gitattributes` marks this
 directory as vendored and excludes its original formatting from whitespace checks.
 
