@@ -252,7 +252,7 @@ fn main() -> Result<()> {
         let input = match input {
             Ok(input) => input,
             // A closed pane has no more input. Leave through the normal cleanup
-            // path so the graphics stream and terminal guard are also dropped.
+            // path so the graphics surface and terminal guard are also dropped.
             Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
             Err(error) => return Err(error).context("터미널 입력 실패"),
         };

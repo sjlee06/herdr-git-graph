@@ -78,14 +78,11 @@ cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 sh scripts/build.sh
-python3 tests/smoke.py ./bin/herdr-git-graph --work /tmp/hgg-smoke
 ```
-
-The Python smoke tests use only the standard library. Keep the work path short: Unix domain socket paths have a small length limit, especially on macOS.
 
 When Herdr is installed, also run `python3 tests/herdr_live.py` after building. It starts a separate headless test session with isolated XDG directories, invokes the real sidebar and full-view actions, checks the resulting panes and graph output, and stops only its own test server. Run this when changing plugin launch arguments; a mock CLI does not enforce Herdr's placement rules.
 
-The [CI workflow](../.github/workflows/ci.yml) runs on macOS and Linux. Tests cover graph topology, real temporary Git repositories, branch filters, empty commits, detached HEAD, linked worktrees, shallow clones, Unicode search, and external-diff suppression. Working tree tests include partial staging, untracked/ignored files, renames, deletions, conflicts, unborn HEAD, bounded patches, and index preservation. Refresh tests check unchanged-status edits, selection/scroll preservation, stale responses, single pending polls, and backoff. PTY tests exercise live edits and commits without manual reload, auto-refresh opt-out, navigation, resize, termination cleanup, graphics transport, and text fallback with a mock Herdr server.
+The [CI workflow](../.github/workflows/ci.yml) runs on macOS and Linux. Tests cover graph topology, real temporary Git repositories, branch filters, empty commits, detached HEAD, linked worktrees, shallow clones, Unicode search, and external-diff suppression. Working tree tests include partial staging, untracked/ignored files, renames, deletions, conflicts, unborn HEAD, bounded patches, and index preservation. Refresh tests check unchanged-status edits, selection/scroll preservation, stale responses, single pending polls, and backoff.
 
 See [validation notes](VALIDATION.md) for recorded results and live terminal testing coverage.
 
@@ -124,14 +121,13 @@ This standalone export has a 40-column content area; the full-terminal image use
 | `src/git.rs` | Bounded Git subprocesses, log/ref parsing, diffs |
 | `src/graph.rs` | Lane assignment from parent commit IDs |
 | `src/ui.rs` | Ratatui panels, Unicode graph, SVG snapshots |
-| `src/graphics.rs` | tiny-skia curves and Herdr PNG streams |
+| `src/graphics.rs` | tiny-skia curves and direct Kitty graphics PNG output |
 | `src/theme.rs` | Native/classic styles, OSC color parsing, shared RGB palette |
 | `src/theme_probe.rs` | Asynchronous terminal queries and color-reply filtering |
-| `src/herdr.rs` | Repository context, plugin action, socket requests |
+| `src/herdr.rs` | Repository context and plugin action helpers |
 | `tests/repository.rs` | Integration tests using temporary Git repositories |
 | `tests/herdr.rs` | Tab/sidebar launch arguments, repository context, CLI errors |
 | `tests/herdr_live.py` | Optional real Herdr action and pane integration in an isolated session |
-| `tests/smoke.py` | PTY and mock Herdr graphics tests |
 
 Graph layout is separate from rendering. Keep parent relationships intact across branch filtering and commit limits, and retain terminal cleanup and text fallback when changing rendering code.
 

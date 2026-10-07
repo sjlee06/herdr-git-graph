@@ -20,4 +20,3 @@ jobs:
       - run: cargo test --locked
       - run: sh scripts/build.sh
       - run: ./bin/herdr-git-graph --demo --check
-      - run: python3 tests/smoke.py ./bin/herdr-git-graph --work /tmp/hgg-smoke

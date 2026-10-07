@@ -22,7 +22,13 @@ A read-only Git graph plugin for Herdr, with a sidebar for browsing history and 
 - **Diffs** — inspect commits and staged or unstaged changes in the full view.
 - **Search** — find commits by message, author, ref, or hash.
 - **Live updates** — local changes appear automatically, checked every 2 seconds by default.
-- **Terminal integration** — follows your terminal theme, with smooth curves in compatible Herdr panes and a text graph otherwise.
+- **Terminal integration** — follows your terminal theme, drawing smooth curves with the standard Kitty graphics protocol in Herdr 0.9.2+ panes and using a text graph otherwise.
+
+## Graphics renderer
+
+Smooth curves are standard Kitty graphics PNGs written directly to the graph pane's PTY; no Herdr graphics socket API is used. The graph stays aligned in terminal cells, keeps text and dialogs above the curves, and removes its own image on resize, help, or exit.
+
+Curves need Herdr 0.9.2+ with Kitty graphics enabled and a compatible outer terminal. The plugin automatically falls back to the colored Unicode graph when that path is unavailable; `--renderer text` always selects it. See the [usage guide](docs/USAGE.md#renderers) for renderer and theme options.
 
 ## Install
 

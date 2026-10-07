@@ -114,13 +114,13 @@ Headless `--snapshot` and `--graph-png` exports cannot query the user's terminal
 ./bin/herdr-git-graph --renderer curves
 ```
 
-- **auto** is the default. It attempts Herdr graphics when the pane environment and resolved lane colors are available and otherwise uses text.
+- **auto** is the default. It uses curves in a Herdr pane once lane colors are resolved, and otherwise uses text.
 - **text** always uses colored Unicode nodes and connecting lines.
-- **curves** attempts the same pixel renderer, with a visible fallback reason if setup fails.
+- **curves** requests the same pixel renderer, with a visible fallback reason when it cannot be initialized.
 
-Smooth curves use tiny-skia to draw antialiased PNG frames in the graph area. Ratatui renders the surrounding text and panels. Herdr's `pane.graphics.info` supplies cell pixel dimensions, and a dedicated `git-graph` stream layer displays the images. Unchanged graph frames are not retransmitted; closing the stream removes its layer.
+Smooth curves use tiny-skia to draw antialiased PNG frames in the graph area. Ratatui renders the surrounding text and panels. On Herdr 0.9.2 and later the application writes the standard [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) directly to its pane PTY: base64-encoded PNG chunks are transmitted with `a=T`, placed in the graph rectangle with `c`/`r`, and deleted by this process's image ID when the graph is hidden, resized, or exits. There is no `pane.graphics.*` socket RPC or Herdr-specific stream layer.
 
-Herdr 0.9.0 enables `[terminal].kitty_graphics` by default. If it is disabled, or the terminal cannot report usable pixel dimensions, the viewer falls back to text. Connection and frame-write failures also trigger a fallback. Pixel rendering depends on the outer terminal and Herdr version; `--renderer curves` alone does not enable graphics outside Herdr.
+The renderer derives the pixel raster size from `TIOCGWINSZ` when the pane reports it and otherwise uses a 10×20 logical cell fallback; Kitty's cell-unit placement still keeps the image aligned with the Ratatui graph area. Herdr enables `[terminal].kitty_graphics` by default. Pixel rendering depends on Herdr, the outer terminal, and that setting; outside a Herdr pane the application intentionally remains in text mode. Write/rasterization failures also switch to text.
 
 See [validation notes](VALIDATION.md) for the distinction between automated renderer tests and live terminal testing.
 

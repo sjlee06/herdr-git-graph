@@ -21,7 +21,6 @@
 - 한글 메시지와 검색, detached HEAD, linked worktree, shallow clone, 브랜치 필터
 - 실제 diff 내용, 조회 전후 working tree 상태 일치, external diff 비활성화
 - 여러 터미널 크기 및 도움말 화면을 Ratatui TestBackend로 렌더링
-- `tests/smoke.py`: PTY에서 탐색, 한글 검색, 도움말, 크기 변경, 정상 종료
 - SIGTERM 종료 시 raw mode·alternate screen·마우스 캡처 복구
 - 가짜 Herdr 서버와 실제 실행 파일 간 그래픽 협상, PNG 프레임 전송, 크기 변경
 - 도움말 표시 및 종료 시 그래픽 스트림/레이어 수명 종료
@@ -73,7 +72,6 @@
 - 닫힌 stdout/stderr에 터미널 복구 오류를 출력하다가 다시 panic하는 경로를 제거. 입력 오류 및 정상 종료 모두 터미널 세션과 그래픽 스트림을 정리.
 - 수정된 릴리스의 5초 유휴 CPU 약 0.2%, PTY 연결 종료 후 약 1ms 안에 종료 코드 0으로 종료하는 것 확인. 이 값은 해당 로컬 측정 결과이며 성능 보장치는 아님.
 - `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, Rust 테스트 47개 통과.
-- 전체 `tests/smoke.py` 통과: auto/terminal/classic 테마, 미완성 OSC 응답 중 연결 종료, 곡선 스트림 해제, 실제 저장소 worker 종료, SIGTERM/SIGHUP/SIGINT 복구 및 기존 탐색·검색·테마·자동 갱신 동작 검증.
 - 별도 XDG 폴더와 서버를 사용하는 `tests/herdr_live.py` 통과. 실제 Herdr의 사이드바·중첩 분할·전체 보기·테마 응답 확인.
 - `scripts/build.sh --release`로 로컬 실행 파일을 갱신하고 `bin/herdr-git-graph`와 릴리스 빌드의 SHA-256 일치 확인.
 

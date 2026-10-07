@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
     env,
     ffi::OsStr,
@@ -223,70 +223,10 @@ fn sidebar_resize(layout: &Value, source: &str, pane: &str) -> Option<(&'static 
     ))
 }
 
-#[cfg(unix)]
-pub mod socket {
-    use super::*;
-    use std::{
-        io::{BufRead, BufReader, Read, Write},
-        os::unix::net::UnixStream,
-        time::Duration,
-    };
-
-    #[derive(Clone)]
-    pub struct Endpoint {
-        pub path: PathBuf,
-        pub pane: String,
-    }
-
-    impl Endpoint {
-        pub fn from_env() -> Result<Self> {
-            Ok(Self {
-                path: env::var_os("HERDR_SOCKET_PATH")
-                    .context("Herdr 소켓이 없습니다.")?
-                    .into(),
-                pane: env::var("HERDR_PANE_ID").context("Herdr 패널 ID가 없습니다.")?,
-            })
-        }
-
-        pub fn connect(&self) -> Result<UnixStream> {
-            let stream = UnixStream::connect(&self.path).context("Herdr 소켓 연결 실패")?;
-            stream.set_read_timeout(Some(Duration::from_millis(700)))?;
-            stream.set_write_timeout(Some(Duration::from_millis(700)))?;
-            Ok(stream)
-        }
-
-        pub fn request_on(
-            &self,
-            stream: &mut UnixStream,
-            method: &str,
-            params: Value,
-        ) -> Result<Value> {
-            serde_json::to_writer(
-                &mut *stream,
-                &json!({"id":"git-graph", "method":method, "params":params}),
-            )?;
-            stream.write_all(b"\n")?;
-            let mut response = String::new();
-            BufReader::new(stream.take(1024 * 1024)).read_line(&mut response)?;
-            let response: Value = serde_json::from_str(&response).context("잘못된 Herdr 응답")?;
-            if let Some(error) = response.get("error") {
-                bail!("Herdr: {error}");
-            }
-            response
-                .get("result")
-                .cloned()
-                .context("Herdr 응답에 result가 없습니다.")
-        }
-
-        pub fn request(&self, method: &str, params: Value) -> Result<Value> {
-            self.request_on(&mut self.connect()?, method, params)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn sidebar_width_uses_its_own_split_and_respects_herdr_limits() {

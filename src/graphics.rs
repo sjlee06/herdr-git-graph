@@ -6,6 +6,15 @@ use anyhow::{Context, Result};
 use ratatui::layout::Rect;
 use tiny_skia::{Color, FillRule, LineCap, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
+#[cfg(unix)]
+use {
+    base64::{Engine as _, engine::general_purpose::STANDARD},
+    std::{
+        io::{self, Write},
+        os::fd::AsRawFd,
+    },
+};
+
 #[derive(Clone, Copy, PartialEq)]
 pub struct Viewport {
     pub area: Rect,
@@ -152,46 +161,49 @@ fn stroke(pixmap: &mut Pixmap, path: PathBuilder, rgb: crate::theme::Rgb, cw: f3
     }
 }
 
+/// A conservative fallback for terminals which do not report pixels through
+/// `TIOCGWINSZ`. The Kitty placement uses cell dimensions, so this only affects
+/// raster quality, not the image's terminal-cell footprint.
+#[cfg(unix)]
+const DEFAULT_CELL_SIZE: (u32, u32) = (10, 20);
+#[cfg(unix)]
+const KITTY_CHUNK_SIZE: usize = 4096;
+
+/// A lightweight Kitty graphics client. Herdr 0.9.2+ accepts these standard
+/// escape sequences on the pane PTY; it no longer exposes a graphics socket RPC.
 #[cfg(unix)]
 pub struct Surface {
-    endpoint: crate::herdr::socket::Endpoint,
-    stream: Option<std::os::unix::net::UnixStream>,
     cell: (u32, u32),
+    image_id: u32,
+    visible: bool,
     last_frame: Option<(u64, Viewport, Theme)>,
 }
 
 #[cfg(unix)]
 impl Surface {
     pub fn connect() -> Result<Self> {
-        let endpoint = crate::herdr::socket::Endpoint::from_env()?;
-        let mut surface = Self {
-            endpoint,
-            stream: None,
-            cell: (0, 0),
+        anyhow::ensure!(
+            std::env::var("HERDR_ENV").as_deref() == Ok("1"),
+            "Kitty graphics are available only inside a Herdr pane"
+        );
+        Ok(Self {
+            cell: terminal_cell_size(),
+            // Process IDs are unique among concurrently running pane clients.
+            // Unlike a fixed ID, this avoids deleting another application's image.
+            image_id: std::process::id().max(1),
+            visible: false,
             last_frame: None,
-        };
-        surface.refresh_size()?;
-        Ok(surface)
+        })
     }
 
     pub fn refresh_size(&mut self) -> Result<()> {
-        let info = self.endpoint.request(
-            "pane.graphics.info",
-            serde_json::json!({"pane_id":self.endpoint.pane}),
-        )?;
-        let width = info["cell_width_px"].as_u64().unwrap_or(0);
-        let height = info["cell_height_px"].as_u64().unwrap_or(0);
-        anyhow::ensure!(
-            (1..=128).contains(&width) && (1..=256).contains(&height),
-            "터미널 픽셀 크기를 확인할 수 없습니다."
-        );
-        self.cell = (width as u32, height as u32);
+        self.hide();
+        self.cell = terminal_cell_size();
         self.last_frame = None;
         Ok(())
     }
 
     pub fn paint(&mut self, graph: &Graph, view: Viewport, theme: Theme) -> Result<()> {
-        use std::io::Write;
         if view.area.is_empty() {
             self.hide();
             return Ok(());
@@ -200,28 +212,94 @@ impl Surface {
             return Ok(());
         }
         let pixmap = rasterize(graph, view, self.cell, theme)?;
-        if self.stream.is_none() {
-            let mut stream = self.endpoint.connect()?;
-            self.endpoint.request_on(&mut stream, "pane.graphics.stream", serde_json::json!({"pane_id":self.endpoint.pane,"layer_id":"git-graph","z_index":1}))?;
-            self.stream = Some(stream);
-        }
-        let stream = self.stream.as_mut().unwrap();
-        let data = pixmap.encode_png()?;
-        let area = view.area;
-        let header = serde_json::json!({"format":"png", "image_width":pixmap.width(), "image_height":pixmap.height(), "data_length":data.len(), "placement":{"viewport_col":area.x,"viewport_row":area.y,"grid_cols":area.width,"grid_rows":area.height}});
-        // Header and bytes are one transaction. A closed stream removes its layer.
-        let mut frame = serde_json::to_vec(&header)?;
-        frame.push(b'\n');
-        frame.extend(data);
-        stream.write_all(&frame)?;
+        let png = pixmap.encode_png()?;
+        let frame = kitty_frame(
+            self.image_id,
+            view.area,
+            pixmap.width(),
+            pixmap.height(),
+            &png,
+        );
+        let mut output = io::stdout().lock();
+        output.write_all(&frame)?;
+        output.flush()?;
+        self.visible = true;
         self.last_frame = Some((graph.fingerprint, view, theme));
         Ok(())
     }
 
     pub fn hide(&mut self) {
-        self.stream.take();
+        if self.visible {
+            // `d=I` deletes both the placement and stored image data for our ID.
+            // Quiet mode keeps terminal replies out of Crossterm's input stream.
+            let mut output = io::stdout().lock();
+            let _ = output.write_all(&kitty_delete(self.image_id));
+            let _ = output.flush();
+        }
+        self.visible = false;
         self.last_frame = None;
     }
+}
+
+#[cfg(unix)]
+impl Drop for Surface {
+    fn drop(&mut self) {
+        self.hide();
+    }
+}
+
+#[cfg(unix)]
+fn terminal_cell_size() -> (u32, u32) {
+    let mut size: libc::winsize = unsafe { std::mem::zeroed() };
+    let result = unsafe { libc::ioctl(io::stdout().as_raw_fd(), libc::TIOCGWINSZ, &mut size) };
+    if result == 0 {
+        let (columns, rows) = (u32::from(size.ws_col), u32::from(size.ws_row));
+        let (pixels_x, pixels_y) = (u32::from(size.ws_xpixel), u32::from(size.ws_ypixel));
+        if columns > 0 && rows > 0 && pixels_x >= columns && pixels_y >= rows {
+            let cell = (pixels_x / columns, pixels_y / rows);
+            if (1..=128).contains(&cell.0) && (1..=256).contains(&cell.1) {
+                return cell;
+            }
+        }
+    }
+    DEFAULT_CELL_SIZE
+}
+
+#[cfg(unix)]
+fn kitty_frame(image_id: u32, area: Rect, width: u32, height: u32, png: &[u8]) -> Vec<u8> {
+    debug_assert!(!png.is_empty());
+    let encoded = STANDARD.encode(png);
+    let chunks: Vec<_> = encoded.as_bytes().chunks(KITTY_CHUNK_SIZE).collect();
+    let mut frame = Vec::with_capacity(encoded.len() + chunks.len() * 32 + 32);
+    // Kitty uses the cursor when it receives the last image-data chunk. Save and
+    // restore it so the overlay does not perturb Ratatui's cursor bookkeeping.
+    frame.extend_from_slice(b"\x1b7");
+    frame.extend_from_slice(format!("\x1b[{};{}H", area.y + 1, area.x + 1).as_bytes());
+    for (index, chunk) in chunks.iter().enumerate() {
+        let more = u8::from(index + 1 < chunks.len());
+        if index == 0 {
+            frame.extend_from_slice(
+                format!(
+                    "\x1b_Ga=T,f=100,s={width},v={height},i={image_id},p=1,c={},r={},z=-1,C=1,q=2,m={more};",
+                    area.width, area.height,
+                )
+                .as_bytes(),
+            );
+        } else {
+            // All transmission and placement metadata belongs to chunk one;
+            // Kitty continuations need only say whether another chunk follows.
+            frame.extend_from_slice(format!("\x1b_Gm={more};").as_bytes());
+        }
+        frame.extend_from_slice(chunk);
+        frame.extend_from_slice(b"\x1b\\");
+    }
+    frame.extend_from_slice(b"\x1b8");
+    frame
+}
+
+#[cfg(unix)]
+fn kitty_delete(image_id: u32) -> Vec<u8> {
+    format!("\x1b_Ga=d,d=I,i={image_id},q=2;\x1b\\").into_bytes()
 }
 
 #[cfg(not(unix))]
@@ -288,6 +366,47 @@ mod tests {
                     .any(|p| (p.red(), p.green(), p.blue(), p.alpha()) == (51, 170, 136, 255))
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kitty_frame_transmits_png_in_bounded_chunks_and_places_it_without_moving_cursor() {
+        let png = vec![0xA5; 4096];
+        let frame = kitty_frame(42, Rect::new(2, 3, 7, 9), 70, 180, &png);
+        assert!(frame.starts_with(
+            b"\x1b7\x1b[4;3H\x1b_Ga=T,f=100,s=70,v=180,i=42,p=1,c=7,r=9,z=-1,C=1,q=2,m=1;"
+        ));
+        assert!(frame.ends_with(b"\x1b8"));
+
+        let start = frame
+            .windows(3)
+            .position(|part| part == b"\x1b_G")
+            .expect("first Kitty graphics sequence");
+        let contents = &frame[start..frame.len() - 2];
+        let messages: Vec<_> = contents
+            .split(|byte| *byte == b'\\')
+            .filter(|message| !message.is_empty())
+            .collect();
+        assert_eq!(messages.len(), 2);
+        let mut encoded = Vec::new();
+        for (index, message) in messages.iter().enumerate() {
+            assert!(message.ends_with(&[0x1b]));
+            let message = &message[..message.len() - 1];
+            let data = message.splitn(2, |byte| *byte == b';').nth(1).unwrap();
+            assert!(data.len() <= KITTY_CHUNK_SIZE);
+            encoded.extend_from_slice(data);
+            if index > 0 {
+                assert!(message.starts_with(b"\x1b_Gm=0;"));
+                assert!(!message.windows(2).any(|part| part == b"a="));
+            }
+        }
+        assert_eq!(STANDARD.decode(encoded).unwrap(), png);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kitty_delete_releases_only_this_clients_image() {
+        assert_eq!(kitty_delete(42), b"\x1b_Ga=d,d=I,i=42,q=2;\x1b\\");
     }
 
     #[test]

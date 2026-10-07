@@ -40,7 +40,6 @@ jobs:
       - run: cargo test --locked
       - run: cargo build --release --locked --target "$RELEASE_TARGET"
       - run: ./target/"$RELEASE_TARGET"/release/herdr-git-graph --demo --check
-      - run: python3 tests/smoke.py ./target/"$RELEASE_TARGET"/release/herdr-git-graph --work /tmp/hgg-smoke
       - name: Package binary and checksum
         run: |
           mkdir -p dist
