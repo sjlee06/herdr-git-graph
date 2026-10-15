@@ -1,5 +1,7 @@
 use super::{SIDEBAR_WIDTH, context_id, open_view, plugin_context};
+use crate::theme::ThemeMode;
 use anyhow::{Context, Result, ensure};
+use clap::ValueEnum;
 use serde_json::{Value, json};
 use std::{
     collections::hash_map::DefaultHasher,
@@ -10,6 +12,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::Command,
+    time::{Duration, Instant},
 };
 
 // One lock per server/workspace serializes open actions and asynchronous hooks.
@@ -58,14 +61,24 @@ impl SidebarState {
         }
     }
 
-    fn save(&self, pane: &Value) -> Result<()> {
-        // Terminal identity prevents a stale record attaching to a new process
-        // after a server restart reuses a public pane ID.
-        let record = json!({
-            "pane_id": string(pane, "pane_id")?,
-            "terminal_id": string(pane, "terminal_id")?,
-        });
-        fs::write(&self.path, serde_json::to_vec(&record)?)?;
+    fn save(&self, pane: &Value, record: &Value) -> Result<()> {
+        // Keep launch settings across moves, and remember the containing tab
+        // so tab deletion can be distinguished from closing only the sidebar.
+        // Terminal identity protects against pane IDs reused after a restart.
+        let mut record = record.clone();
+        for key in ["pane_id", "terminal_id", "tab_id"] {
+            record[key] = json!(string(pane, key)?);
+        }
+        self.write(&record)
+    }
+
+    fn write(&self, record: &Value) -> Result<()> {
+        // Readers must see either the previous snapshot or the complete new
+        // one if a pane is terminated during a write. The lock serializes this
+        // temporary path across viewers, actions, and hooks.
+        let temporary = self.path.with_extension("tmp");
+        fs::write(&temporary, serde_json::to_vec(record)?)?;
+        fs::rename(temporary, &self.path)?;
         Ok(())
     }
 
@@ -75,6 +88,80 @@ impl SidebarState {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error.into()),
         }
+    }
+}
+
+// Only action-managed viewers participate. Direct pane opens and standalone
+// --sidebar runs must not read or overwrite a workspace's shared view.
+pub struct SidebarSession {
+    workspace: String,
+    pane: String,
+    snapshot: Value,
+    geometry_due: Instant,
+}
+
+impl SidebarSession {
+    pub fn restore(app: &mut crate::app::App) -> Result<Option<Self>> {
+        if env::var("HERDR_GIT_GRAPH_SHARED").as_deref() != Ok("1") {
+            return Ok(None);
+        }
+        let workspace = env::var("HERDR_WORKSPACE_ID")?;
+        let pane = env::var("HERDR_PANE_ID")?;
+        let state = SidebarState::lock(&workspace)?;
+        let Some(record) = state.read()? else {
+            return Ok(None);
+        };
+        if record["pane_id"] != pane {
+            return Ok(None);
+        }
+        super::view_state::restore(app, &record["view"]);
+        Ok(Some(Self {
+            workspace,
+            pane,
+            snapshot: Value::Null,
+            geometry_due: Instant::now(),
+        }))
+    }
+
+    pub fn update(&mut self, app: &crate::app::App, resized: bool) -> Result<()> {
+        let snapshot = super::view_state::snapshot(app);
+        // Headless Herdr can change logical split geometry without resizing
+        // the PTY. Check occasionally as well as on terminal resize events.
+        let geometry_due = resized || Instant::now() >= self.geometry_due;
+        if self.snapshot == snapshot && !geometry_due {
+            return Ok(());
+        }
+        let state = SidebarState::lock(&self.workspace)?;
+        if let Some(mut record) = state.read()?
+            && record["pane_id"] == self.pane
+        {
+            let previous = record.clone();
+            record["view"] = snapshot.clone();
+            if geometry_due {
+                let bin = env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
+                if let Ok(actual) = pane_width(&bin, &self.pane) {
+                    remember_width(&mut record, actual);
+                }
+            }
+            if record != previous {
+                state.write(&record)?;
+            }
+        }
+        self.snapshot = snapshot;
+        if geometry_due {
+            self.geometry_due = Instant::now() + Duration::from_secs(1);
+        }
+        Ok(())
+    }
+
+    pub fn close(&self) -> Result<()> {
+        let state = SidebarState::lock(&self.workspace)?;
+        if let Some(record) = state.read()?
+            && record["pane_id"] == self.pane
+        {
+            state.clear()?;
+        }
+        Ok(())
     }
 }
 
@@ -105,18 +192,39 @@ fn panes(bin: &OsStr, workspace: &str) -> Result<Vec<Value>> {
         .context("Herdr 응답에 패널 목록이 없습니다.")
 }
 
-fn saved_pane(state: &SidebarState, panes: &[Value], record: &Value) -> Result<Option<Value>> {
-    let pane = panes.iter().find(|pane| {
-        pane["pane_id"].is_string()
-            && pane["terminal_id"].is_string()
-            && pane["pane_id"] == record["pane_id"]
-            && pane["terminal_id"] == record["terminal_id"]
-    });
-    if pane.is_none() {
-        // Closing the sidebar opts out until the next explicit open action.
-        state.clear()?;
-    }
-    Ok(pane.cloned())
+fn saved_pane(panes: &[Value], record: &Value) -> Option<Value> {
+    panes
+        .iter()
+        .find(|pane| {
+            pane["pane_id"].is_string()
+                && pane["terminal_id"].is_string()
+                && pane["pane_id"] == record["pane_id"]
+                && pane["terminal_id"] == record["terminal_id"]
+        })
+        .cloned()
+}
+
+fn create_sidebar(
+    state: &SidebarState,
+    root: &Path,
+    theme: ThemeMode,
+    source: &str,
+    previous: Option<&Value>,
+) -> Result<Vec<u8>> {
+    let mut record = previous.cloned().unwrap_or_else(|| json!({}));
+    record["repo"] = json!(root);
+    record["theme"] = json!(theme.to_possible_value().unwrap().get_name());
+    let width = preferred_width(&record);
+    record["width"] = json!(width);
+    let output = open_view(root, Some((source, width)), theme)?;
+    let response: Value = serde_json::from_slice(&output)?;
+    let pane = response
+        .pointer("/result/plugin_pane/pane")
+        .context("새 사이드바 패널 정보가 없습니다.")?;
+    let bin = env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
+    record["actual_width"] = json!(pane_width(&bin, string(pane, "pane_id")?)?);
+    state.save(pane, &record)?;
+    Ok(output)
 }
 
 pub fn open_sidebar(explicit: Option<&Path>, theme: crate::theme::ThemeMode) -> Result<()> {
@@ -129,13 +237,12 @@ pub fn open_sidebar(explicit: Option<&Path>, theme: crate::theme::ThemeMode) -> 
     let bin = env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
     if let Some(record) = state.read()? {
         let panes = panes(&bin, &workspace)?;
-        if let Some(pane) = saved_pane(&state, &panes, &record)? {
+        if let Some(pane) = saved_pane(&panes, &record) {
             let target = panes
                 .iter()
                 .find(|pane| pane["pane_id"] == source)
                 .context("사이드바를 열 대상 패널이 없습니다.")?;
-            let pane = move_sidebar(&bin, &pane, target)?;
-            state.save(&pane)?;
+            let pane = relocate_sidebar(&state, &bin, &pane, target, &record)?;
             serde_json::to_writer(
                 std::io::stdout(),
                 &json!({
@@ -146,51 +253,108 @@ pub fn open_sidebar(explicit: Option<&Path>, theme: crate::theme::ThemeMode) -> 
             )?;
             return Ok(());
         }
+        state.clear()?;
     }
     let root = super::repository_path(explicit)?;
-    let output = open_view(&root, true, theme)?;
-    let response: Value = serde_json::from_slice(&output)?;
-    let pane = response
-        .pointer("/result/plugin_pane/pane")
-        .context("새 사이드바 패널 정보가 없습니다.")?;
-    state.save(pane)?;
+    let output = create_sidebar(&state, &root, theme, &source, None)?;
     std::io::stdout().write_all(&output)?;
     Ok(())
 }
 
-// Event hooks must not discover a repository: a destination tab can be a shell
-// in a non-Git directory. Read live focus under the lock rather than trusting
-// the event's tab ID, which can already be stale during rapid tab switching.
+// Hooks use live focus under the lock: event contexts may already be stale,
+// and the focused destination need not be a Git directory.
 pub fn sync_sidebar() -> Result<()> {
     let context = plugin_context();
-    let Some(workspace) = context_id(&context, "workspace_id", "HERDR_WORKSPACE_ID") else {
+    let event: Value = env::var("HERDR_PLUGIN_EVENT_JSON")
+        .ok()
+        .and_then(|value| serde_json::from_str(&value).ok())
+        .unwrap_or(Value::Null);
+    let Some(workspace) = event["data"]["workspace_id"]
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| context_id(&context, "workspace_id", "HERDR_WORKSPACE_ID"))
+    else {
         return Ok(());
     };
     let state = SidebarState::lock(&workspace)?;
     let Some(record) = state.read()? else {
         return Ok(());
     };
+    if matches!(
+        env::var("HERDR_PLUGIN_EVENT").as_deref(),
+        Ok("pane.closed" | "pane.exited")
+    ) {
+        // Herdr emits these for a directly closed/exited pane, not for each
+        // child of a deleted tab. Delayed events must not disable a replacement.
+        if event["data"]["pane_id"] == record["pane_id"] {
+            state.clear()?;
+        }
+        return Ok(());
+    }
     let bin = env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
-    let response = request(&bin, &["workspace", "get", &workspace])?;
-    let workspace_info = &response["result"]["workspace"];
+    let response = request(&bin, &["workspace", "list"])?;
+    let workspaces = response
+        .pointer("/result/workspaces")
+        .and_then(Value::as_array)
+        .context("Herdr 응답에 작업 공간 목록이 없습니다.")?;
+    let Some(workspace_info) = workspaces
+        .iter()
+        .find(|info| info["workspace_id"] == workspace)
+    else {
+        // Closing the last tab removes its workspace; never restore elsewhere.
+        return state.clear();
+    };
     if workspace_info["focused"] != true {
         return Ok(());
     }
     let tab = string(workspace_info, "active_tab_id")?;
     let panes = panes(&bin, &workspace)?;
-    let Some(pane) = saved_pane(&state, &panes, &record)? else {
-        return Ok(());
-    };
-    if pane["tab_id"] == tab {
-        return Ok(());
-    }
     let target = panes
         .iter()
         .find(|pane| pane["tab_id"] == tab && pane["focused"] == true)
         .or_else(|| panes.iter().find(|pane| pane["tab_id"] == tab));
+    if let Some(pane) = saved_pane(&panes, &record) {
+        if pane["tab_id"] == tab {
+            return Ok(());
+        }
+        if let Some(target) = target {
+            relocate_sidebar(&state, &bin, &pane, target, &record)?;
+        }
+        return Ok(());
+    }
+    // Legacy records lack recovery settings. A reused pane ID must also never
+    // be treated as permission to reopen an old sidebar after a server restart.
+    let (Some(previous_tab), Some(repo), Some(theme)) = (
+        record["tab_id"].as_str(),
+        record["repo"].as_str(),
+        record["theme"].as_str(),
+    ) else {
+        return state.clear();
+    };
+    if panes
+        .iter()
+        .any(|pane| pane["pane_id"] == record["pane_id"])
+    {
+        return state.clear();
+    }
+    let response = request(&bin, &["tab", "list", "--workspace", &workspace])?;
+    let tabs = response
+        .pointer("/result/tabs")
+        .and_then(Value::as_array)
+        .context("Herdr 응답에 탭 목록이 없습니다.")?;
+    if tabs.iter().any(|tab| tab["tab_id"] == previous_tab) {
+        // Its tab survived, so only the sidebar was closed: opt out.
+        return state.clear();
+    }
     if let Some(target) = target {
-        let moved = move_sidebar(&bin, &pane, target)?;
-        state.save(&moved)?;
+        let theme = ThemeMode::from_str(theme, false).map_err(anyhow::Error::msg)?;
+        create_sidebar(
+            &state,
+            Path::new(repo),
+            theme,
+            string(target, "pane_id")?,
+            Some(&record),
+        )?;
     }
     Ok(())
 }
@@ -209,16 +373,50 @@ fn pane_width(bin: &OsStr, pane: &str) -> Result<u16> {
     Ok(width)
 }
 
-fn move_sidebar(bin: &OsStr, pane: &Value, target: &Value) -> Result<Value> {
+fn preferred_width(record: &Value) -> u16 {
+    record["width"]
+        .as_u64()
+        .and_then(|width| u16::try_from(width).ok())
+        .filter(|width| *width > 0)
+        .unwrap_or(SIDEBAR_WIDTH)
+}
+
+fn remember_width(record: &mut Value, actual: u16) {
+    // A move records its constrained actual width before releasing the lock.
+    // A later difference is a user/host resize, not a temporary move clamp.
+    if record["width"].is_null()
+        || record["actual_width"]
+            .as_u64()
+            .is_some_and(|width| width != u64::from(actual))
+    {
+        record["width"] = json!(actual);
+    }
+    record["actual_width"] = json!(actual);
+}
+
+fn relocate_sidebar(
+    state: &SidebarState,
+    bin: &OsStr,
+    pane: &Value,
+    target: &Value,
+    previous: &Value,
+) -> Result<Value> {
+    let mut record = previous.clone();
+    remember_width(&mut record, pane_width(bin, string(pane, "pane_id")?)?);
+    let moved = move_sidebar(bin, pane, target, preferred_width(&record))?;
+    record["actual_width"] = json!(pane_width(bin, string(&moved, "pane_id")?)?);
+    state.save(&moved, &record)?;
+    Ok(moved)
+}
+
+fn move_sidebar(bin: &OsStr, pane: &Value, target: &Value, width: u16) -> Result<Value> {
     if pane["tab_id"] == target["tab_id"] {
         return Ok(pane.clone());
     }
     let pane_id = string(pane, "pane_id")?;
     let target_id = string(target, "pane_id")?;
     let tab = string(target, "tab_id")?;
-    let width = pane_width(bin, pane_id).unwrap_or(SIDEBAR_WIDTH);
     let available = pane_width(bin, target_id)?;
-    let width = width.min(available / 2);
     let ratio = (1.0 - f64::from(width) / f64::from(available)).clamp(0.1, 0.9);
     let response = request(
         bin,

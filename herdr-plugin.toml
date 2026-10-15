@@ -24,6 +24,18 @@ command = ["./bin/herdr-git-graph", "--open-sidebar"]
 on = "tab.focused"
 command = ["./bin/herdr-git-graph", "--sync-sidebar"]
 
+[[events]]
+on = "tab.closed"
+command = ["./bin/herdr-git-graph", "--sync-sidebar"]
+
+[[events]]
+on = "pane.closed"
+command = ["./bin/herdr-git-graph", "--sync-sidebar"]
+
+[[events]]
+on = "pane.exited"
+command = ["./bin/herdr-git-graph", "--sync-sidebar"]
+
 [[panes]]
 id = "graph"
 title = "Git Graph"

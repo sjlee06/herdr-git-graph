@@ -167,6 +167,11 @@ fn main() -> Result<()> {
         io::stdin().is_terminal() && io::stdout().is_terminal(),
         "대화형 터미널에서 실행하세요. 미리보기는 --demo --snapshot preview.svg를 사용하세요."
     );
+    let mut sidebar_session = if args.sidebar {
+        herdr::SidebarSession::restore(&mut app)?
+    } else {
+        None
+    };
     let worker = (!args.demo).then(|| Worker::start(root, args.limit as usize));
     let stop = Arc::new(AtomicBool::new(false));
     #[cfg(unix)]
@@ -188,7 +193,14 @@ fn main() -> Result<()> {
     let palette_deadline = std::time::Instant::now() + Duration::from_millis(700);
     let mut palette_fallback_reported = false;
     let mut dirty = true;
+    let mut terminal_size = crossterm::terminal::size()?;
     while !app.quit && !stop.load(Ordering::Relaxed) {
+        // A resize can precede Crossterm's SIGWINCH registration during startup.
+        // Checking the PTY size also captures that change without polling Herdr.
+        let size = crossterm::terminal::size()?;
+        let mut resized = size != terminal_size;
+        terminal_size = size;
+        dirty |= resized;
         if args.renderer != Renderer::Text && !graphics_attempted && app.theme.supports_curves() {
             graphics_attempted = true;
             match Surface::connect() {
@@ -228,6 +240,9 @@ fn main() -> Result<()> {
                 viewport = ui::draw(frame, &mut app, surface.is_some());
             })?;
             dirty = false;
+            if let Some(shared) = &mut sidebar_session {
+                shared.update(&app, resized)?;
+            }
             if let Some(graphics) = &mut surface {
                 let result = if let Some(view) = viewport {
                     graphics.paint(&app.graph, view, app.theme)
@@ -289,6 +304,7 @@ fn main() -> Result<()> {
                 }
                 Event::Resize(_, _) => {
                     dirty = true;
+                    resized = true;
                     if let Some(graphics) = &mut surface
                         && let Err(error) = graphics.refresh_size()
                     {
@@ -298,6 +314,14 @@ fn main() -> Result<()> {
                     }
                 }
                 _ => {}
+            }
+        }
+        if let Some(shared) = &mut sidebar_session {
+            if app.quit {
+                // Opt out before exiting, even if a tab-close hook is pending.
+                shared.close()?;
+            } else {
+                shared.update(&app, resized)?;
             }
         }
     }

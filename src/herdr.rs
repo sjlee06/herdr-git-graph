@@ -1,6 +1,7 @@
 mod sidebar;
+mod view_state;
 
-pub use sidebar::{open_sidebar, sync_sidebar};
+pub use sidebar::{SidebarSession, open_sidebar, sync_sidebar};
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
@@ -67,12 +68,17 @@ pub fn context_paths(context: &Value) -> Vec<PathBuf> {
 }
 
 pub fn open_pane(root: &Path, theme: crate::theme::ThemeMode) -> Result<()> {
-    std::io::stdout().write_all(&open_view(root, false, theme)?)?;
+    std::io::stdout().write_all(&open_view(root, None, theme)?)?;
     Ok(())
 }
 
-fn open_view(root: &Path, sidebar: bool, theme: crate::theme::ThemeMode) -> Result<Vec<u8>> {
+fn open_view(
+    root: &Path,
+    source_pane: Option<(&str, u16)>,
+    theme: crate::theme::ThemeMode,
+) -> Result<Vec<u8>> {
     use clap::ValueEnum;
+    let sidebar = source_pane.is_some();
     let context = plugin_context();
     let bin = env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
     let mut command = Command::new(&bin);
@@ -98,21 +104,16 @@ fn open_view(root: &Path, sidebar: bool, theme: crate::theme::ThemeMode) -> Resu
             "HERDR_GIT_GRAPH_THEME={}",
             theme.to_possible_value().unwrap().get_name()
         ));
-    let source_pane = if sidebar {
-        // Herdr actions carry their source pane in the invocation context.
+    if let Some((id, _)) = source_pane {
+        command.args(["--env", "HERDR_GIT_GRAPH_SHARED=1"]);
         // Split placement accepts a target pane, but rejects workspace_id.
-        let id = context_id(&context, "focused_pane_id", "HERDR_PANE_ID")
-            .context("사이드바를 열 대상 패널이 없습니다. Herdr 패널 안에서 액션을 실행하세요.")?;
+        // Recovery uses live focus, not the closed tab's invocation context.
         command
             .args(["--direction", "right", "--target-pane"])
-            .arg(&id);
-        Some(id)
-    } else {
-        if let Some(id) = context_id(&context, "workspace_id", "HERDR_WORKSPACE_ID") {
-            command.arg("--workspace").arg(id);
-        }
-        None
-    };
+            .arg(id);
+    } else if let Some(id) = context_id(&context, "workspace_id", "HERDR_WORKSPACE_ID") {
+        command.arg("--workspace").arg(id);
+    }
     let output = command
         .stderr(Stdio::inherit())
         .output()
@@ -120,7 +121,7 @@ fn open_view(root: &Path, sidebar: bool, theme: crate::theme::ThemeMode) -> Resu
     if !output.status.success() {
         bail!("Herdr Git Graph 패널을 열지 못했습니다. 플러그인 등록을 확인하세요.");
     }
-    if let Some(source) = source_pane {
+    if let Some((source, width)) = source_pane {
         // Herdr 0.9 has no width/ratio option on plugin pane open. Resize the
         // newly created split once, without changing the caller's focus.
         let resize = || -> Result<()> {
@@ -129,7 +130,7 @@ fn open_view(root: &Path, sidebar: bool, theme: crate::theme::ThemeMode) -> Resu
                 .pointer("/result/plugin_pane/pane/pane_id")
                 .and_then(Value::as_str)
                 .context("새 패널 ID가 없습니다.")?;
-            size_sidebar(&bin, &source, pane)
+            size_sidebar(&bin, source, pane, width)
         };
         if let Err(error) = resize() {
             eprintln!("사이드바는 열렸지만 초기 너비를 맞추지 못했습니다: {error}");
@@ -142,7 +143,7 @@ fn open_view(root: &Path, sidebar: bool, theme: crate::theme::ThemeMode) -> Resu
 // "Uncommitted changes" subject. This is the outer split width in columns.
 const SIDEBAR_WIDTH: u16 = 40;
 
-fn size_sidebar(bin: &OsStr, source: &str, pane: &str) -> Result<()> {
+fn size_sidebar(bin: &OsStr, source: &str, pane: &str, width: u16) -> Result<()> {
     let output = Command::new(bin)
         .args(["pane", "layout", "--pane", pane])
         .output()?;
@@ -154,8 +155,8 @@ fn size_sidebar(bin: &OsStr, source: &str, pane: &str) -> Result<()> {
     let layout = response
         .pointer("/result/layout")
         .context("패널 레이아웃이 없습니다.")?;
-    let (direction, amount) =
-        sidebar_resize(layout, source, pane).context("사이드바 분할 크기를 찾지 못했습니다.")?;
+    let (direction, amount) = sidebar_resize(layout, source, pane, width)
+        .context("사이드바 분할 크기를 찾지 못했습니다.")?;
     if amount < f64::EPSILON {
         return Ok(());
     }
@@ -181,7 +182,12 @@ fn size_sidebar(bin: &OsStr, source: &str, pane: &str) -> Result<()> {
     Ok(())
 }
 
-fn sidebar_resize(layout: &Value, source: &str, pane: &str) -> Option<(&'static str, f64)> {
+fn sidebar_resize(
+    layout: &Value,
+    source: &str,
+    pane: &str,
+    width: u16,
+) -> Option<(&'static str, f64)> {
     use ratatui::layout::Rect;
     fn rect(value: &Value) -> Option<Rect> {
         let field = |key| u16::try_from(value.get(key)?.as_u64()?).ok();
@@ -212,9 +218,7 @@ fn sidebar_resize(layout: &Value, source: &str, pane: &str) -> Option<(&'static 
     if !current.is_finite() || !(0.1..=0.9).contains(&current) {
         return None;
     }
-    // Leave a small source pane at least half the available width. Herdr also
-    // constrains each child to 10–90% of its parent split.
-    let width = SIDEBAR_WIDTH.min(area.width / 2);
+    // Keep the requested column width, subject only to Herdr's split limits.
     let target = (1.0 - f64::from(width) / f64::from(area.width)).clamp(0.1, 0.9);
     Some((
         if target >= current { "right" } else { "left" },
@@ -232,7 +236,7 @@ mod tests {
         for (total, current, expected) in [
             (100, 0.5, 0.6),
             (80, 0.8, 0.5),
-            (40, 0.5, 0.5),
+            (40, 0.5, 0.1),
             (400, 0.5, 0.9),
         ] {
             let first = (f64::from(total) * current).round() as u16;
@@ -247,7 +251,7 @@ mod tests {
                     {"direction":"right","ratio":current,"rect":{"x":30,"y":2,"width":total,"height":20}}
                 ]
             });
-            let (direction, amount) = sidebar_resize(&layout, "source", "graph").unwrap();
+            let (direction, amount) = sidebar_resize(&layout, "source", "graph", 40).unwrap();
             let ratio = current
                 + if direction == "right" {
                     amount
@@ -255,9 +259,9 @@ mod tests {
                     -amount
                 };
             assert!((ratio - expected).abs() < 0.0001, "{total}: {ratio}");
-            assert!(sidebar_resize(&layout, "missing", "graph").is_none());
+            assert!(sidebar_resize(&layout, "missing", "graph", 40).is_none());
         }
-        assert!(sidebar_resize(&json!({}), "source", "graph").is_none());
+        assert!(sidebar_resize(&json!({}), "source", "graph", 40).is_none());
     }
 
     #[test]

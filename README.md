@@ -47,9 +47,9 @@ From a Herdr workspace containing a Git repository, open the sidebar beside your
 herdr plugin action invoke herdr.git-graph.sidebar
 ```
 
-The action reuses one sidebar per workspace. If it is on another tab, it moves to the tab you invoked the action from; subsequent tab switches bring it along without taking focus. The same process keeps the selected commit, scroll position, search, and theme. Its width is preserved where the target pane allows, and other workspaces have their own sidebar.
+The action reuses one sidebar per workspace. If it is on another tab, it moves to the tab you invoked the action from; subsequent tab switches bring it along without taking focus. The same process keeps the selected commit, scroll position, search, and theme. Your chosen width is remembered and restored where space allows, and other workspaces have their own sidebar.
 
-Drag the divider or use `prefix+r` to resize the sidebar. Use `prefix+l` to focus it, then `q` to close. Closing the pane or its containing tab also ends sharing; only another sidebar action opens it again. See the [usage guide](docs/USAGE.md#graph-only-sidebar) for sizing limits and unshared sidebar launches.
+Drag the divider or use `prefix+r` to resize the sidebar. Use `prefix+l` to focus it, then `q` to close. Closing the pane also ends sharing; only another sidebar action opens it again. Closing its containing tab instead recreates the sidebar if another tab remains in the same workspace, restoring its original repository, theme, selected commit, scroll position, search, and chosen width. See the [usage guide](docs/USAGE.md#graph-only-sidebar) for sizing limits and unshared sidebar launches.
 
 ### Full view
 

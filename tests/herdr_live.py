@@ -76,12 +76,12 @@ def verify(base, herdr):
         assert log["status"] == "succeeded", log
         return json.loads(log["stdout"])["result"]["plugin_pane"]["pane"]
 
-    def hooks_since(previous, minimum=1, expected_status="succeeded"):
+    def hooks_since(previous, minimum=1, expected_status="succeeded", event="tab.focused"):
         # For negative assertions (after closing), waiting for the actual hooks
         # is essential: checking absence immediately after focus would race them.
         hooks = wait_for(
-            "tab.focused hooks to finish",
-            lambda: [item for item in logs() if item.get("event") == "tab.focused"
+            f"{event} hooks to finish",
+            lambda: [item for item in logs() if item.get("event") == event
                      and item["log_id"] not in previous],
             lambda items: len(items) >= minimum
                           and all(item["status"] != "running" for item in items))
@@ -104,6 +104,17 @@ def verify(base, herdr):
     def panes(workspace):
         return data("pane", "list", "--workspace", workspace)["panes"]
 
+    def saved_view(pane):
+        directory = base / "s/herdr/plugins/herdr.git-graph/shared-sidebars"
+        for path in directory.glob("*.json"):
+            try:
+                record = json.loads(path.read_text())
+            except (FileNotFoundError, json.JSONDecodeError):
+                continue
+            if record.get("pane_id") == pane["pane_id"]:
+                return record
+        return {}
+
     def layout(pane):
         return data("pane", "layout", "--pane", pane)["layout"]
 
@@ -117,10 +128,12 @@ def verify(base, herdr):
         # textual selection/viewport assertions; theme checks use raw ANSI.
         return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", screen)
 
+    def visible_history(screen):
+        return tuple(re.findall(r"History \d{2}|Initial history|Uncommitted changes", screen))
+
     def graph_state(screen):
         selection = re.search(r"\b(\d+)/(\d+)\s*·", screen)
-        subjects = tuple(re.findall(r"History \d{2}|Initial history|Uncommitted changes",
-                                    screen))
+        subjects = visible_history(screen)
         return (selection.groups(), subjects) if selection and subjects else None
 
     def shared_at(sidebar, workspace, tab, source, ordinary, remembered_width=None):
@@ -362,10 +375,147 @@ def verify(base, herdr):
             shared_at(reopened_again, workspace, tab3, source3, ordinary, 40)
             assert data("pane", "get", other_sidebar["pane_id"])["pane"]["terminal_id"] == \
                 other_sidebar["terminal_id"]
+            # Closing the containing tab kills its process. The tab.closed hook
+            # must create exactly one replacement on the surviving tab without
+            # requiring another action or an extra focus event. A non-Git
+            # survivor verifies that the saved repository is used.
+            recovery = data("workspace", "create", "--cwd", str(base),
+                            "--label", "Tab close recovery", "--focus")
+            recovery_workspace = recovery["workspace"]["workspace_id"]
+            recovery_tab = recovery["tab"]["tab_id"]
+            recovery_source = recovery["root_pane"]["pane_id"]
+            # First open needs Git context, even though the survivor is non-Git.
+            second_tab, second_source = create_tab(recovery_workspace, "Close me", repo)
+            focus_tabs(second_tab)
+            original = invoke("sidebar")
+            shared_at(original, recovery_workspace, second_tab, second_source,
+                      {recovery_source, second_source}, 40)
+            wait_for("managed viewer saves its initial state", lambda: saved_view(original),
+                     lambda record: bool(record.get("view")))
+            run("pane", "resize", "--pane", original["pane_id"], "--direction", "left",
+                "--amount", "0.08")
+            recovery_width = width(layout(original["pane_id"]), original["pane_id"])
+            assert recovery_width > 40, recovery_width
+            run("pane", "send-keys", original["pane_id"], "G", "k", "k", "k", "/")
+            run("pane", "send-text", original["pane_id"], "History")
+            before_close = wait_for(
+                "persisted selection, viewport, search and manual width",
+                lambda: saved_view(original),
+                lambda record: record.get("width") == recovery_width
+                              and record.get("view", {}).get("query") == "History"
+                              and record["view"].get("searching") is True
+                              and record["view"].get("selected", 0) > 20
+                              and record["view"].get("top", 0) > 0)
+            screen_state = visible_history(wait_for(
+                "scrolled search before tab close", lambda: read_graph(original["pane_id"]),
+                lambda text: bool(visible_history(text)) and "/ History" in text
+                             and "Uncommitted changes" not in text))
+            before_close = saved_view(original)
+            previous = {item["log_id"] for item in logs()}
+            run("tab", "close", second_tab)
+            hooks_since(previous, event="tab.closed")
+            survivors = panes(recovery_workspace)
+            graphs = [pane for pane in survivors if pane.get("label") == "Git Graph Sidebar"]
+            assert len(graphs) == 1, survivors
+            restored = graphs[0]
+            assert restored["terminal_id"] != original["terminal_id"], (original, restored)
+            shared_at(restored, recovery_workspace, recovery_tab, recovery_source,
+                      {recovery_source}, recovery_width)
+            wait_for("restored selection, viewport and search",
+                     lambda: read_graph(restored["pane_id"]),
+                     lambda text: visible_history(text) == screen_state and "/ History" in text)
+            after_close = wait_for("restored persistent view", lambda: saved_view(restored),
+                                   lambda record: record.get("view") == before_close["view"])
+            assert after_close["width"] == recovery_width, after_close
+            # Late close/exit events for the old process must not clear the new
+            # record. Further focus follows the replacement, not another graph.
+            next_tab, next_source = create_tab(recovery_workspace, "Follow restored", base)
+            focus_tabs(next_tab, recovery_tab, next_tab)
+            shared_at(restored, recovery_workspace, next_tab, next_source,
+                      {recovery_source, next_source}, recovery_width)
+            # Constrain the focused target pane to 40 columns. A narrow tab
+            # may clamp the actual split, but must not overwrite the preference.
+            narrow_tab, narrow_source = create_tab(recovery_workspace, "Narrow destination", base)
+            total = width(layout(narrow_source), narrow_source)
+            data("pane", "split", "--pane", narrow_source, "--direction", "right",
+                 "--ratio", str(40 / total), "--cwd", str(base), "--no-focus")
+            focus_tabs(narrow_tab)
+            narrow_actual = width(layout(restored["pane_id"]), restored["pane_id"])
+            assert narrow_actual < recovery_width, (narrow_actual, recovery_width)
+            wait_for("temporary clamp retains preferred width", lambda: saved_view(restored),
+                     lambda record: record.get("actual_width") == narrow_actual
+                                   and record.get("width") == recovery_width)
+            focus_tabs(next_tab)
+            shared_at(restored, recovery_workspace, next_tab, next_source,
+                      {recovery_source, next_source} | {pane["pane_id"] for pane in panes(recovery_workspace)
+                       if pane["tab_id"] == narrow_tab}, recovery_width)
+            # Delete the narrow tab while it contains the sidebar, too: the
+            # replacement must use the preference, not the clamped actual size.
+            focus_tabs(narrow_tab)
+            old_terminal = restored["terminal_id"]
+            previous = {item["log_id"] for item in logs()}
+            run("tab", "close", narrow_tab)
+            hooks_since(previous, event="tab.closed")
+            graphs = [pane for pane in panes(recovery_workspace)
+                      if pane.get("label") == "Git Graph Sidebar"]
+            assert len(graphs) == 1, graphs
+            restored = graphs[0]
+            assert restored["terminal_id"] != old_terminal, restored
+            shared_at(restored, recovery_workspace, next_tab, next_source,
+                      {recovery_source, next_source}, recovery_width)
+            wait_for("view survives closing a constrained tab", lambda: saved_view(restored),
+                     lambda record: record.get("view", {}).get("selected_oid") ==
+                                    before_close["view"]["selected_oid"]
+                                    and record["view"].get("query") == "History")
+            wait_for("replacement has rendered before sending input",
+                     lambda: read_graph(restored["pane_id"]),
+                     lambda text: "/ History" in text and bool(visible_history(text)))
+            run("pane", "send-keys", restored["pane_id"], "esc")
+            wait_for("leave restored search before q", lambda: saved_view(restored),
+                     lambda record: record.get("view", {}).get("searching") is False
+                                   and record["view"].get("query") == "")
+
+            # Explicit close still opts out, even when its containing tab is
+            # subsequently deleted. Check both q and host pane close.
+            for close_method, close_event in [("q", "pane.exited"), ("pane", "pane.closed")]:
+                previous = {item["log_id"] for item in logs()}
+                if close_method == "q":
+                    run("pane", "send-keys", restored["pane_id"], "q")
+                else:
+                    run("pane", "close", restored["pane_id"])
+                hooks_since(previous, event=close_event)
+                wait_for("explicit close before deleting tab", lambda: panes(recovery_workspace),
+                         lambda items: all(pane["terminal_id"] != restored["terminal_id"]
+                                           for pane in items))
+                previous = {item["log_id"] for item in logs()}
+                run("tab", "close", next_tab)
+                hooks_since(previous, event="tab.closed")
+                assert {pane["pane_id"] for pane in panes(recovery_workspace)} == {recovery_source}
+                if close_method == "q":
+                    next_tab, next_source = create_tab(recovery_workspace, "Manual close", repo)
+                    focus_tabs(next_tab)
+                    restored = invoke("sidebar")
+
+            # The last tab closes the workspace rather than opening elsewhere.
+            second_tab, _ = create_tab(recovery_workspace, "Last graph", repo)
+            focus_tabs(second_tab)
+            invoke("sidebar")
+            previous = {item["log_id"] for item in logs()}
+            run("tab", "close", recovery_tab)
+            hooks_since(previous, event="tab.closed")
+            previous = {item["log_id"] for item in logs()}
+            run("tab", "close", second_tab)
+            hooks_since(previous, event="tab.closed")
+            assert all(item["workspace_id"] != recovery_workspace
+                       for item in data("workspace", "list")["workspaces"])
+            assert data("pane", "get", other_sidebar["pane_id"])["pane"]["terminal_id"] == \
+                other_sidebar["terminal_id"]
             print("PASS: isolated Herdr shared sidebar; repeated/non-Git actions; tab moves/back/rapid focus; "
                   "stable pane/terminal, selection/scroll, manual width and source focus; "
                   "independent workspace; q/manual close opt-out; full-view action; "
-                  "zoom failure/recovery; OSC theme")
+                  "zoom failure/recovery; containing-tab close restores view/search/width to non-Git tab; "
+                  "narrow-to-wide preferred-width recovery; "
+                  "q/manual opt-out followed by tab close; last-tab close; OSC theme")
         finally:
             # All commands use the test session and isolated XDG paths.
             run("server", "stop", check=False)

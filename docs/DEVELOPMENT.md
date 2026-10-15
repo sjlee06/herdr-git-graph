@@ -17,7 +17,7 @@ herdr plugin link .
 
 The build script runs `cargo build --release --locked` and copies the executable to `bin/herdr-git-graph`, the path declared by the plugin manifest. `CARGO_TARGET_DIR` is supported. Generated binaries and build output are ignored by Git.
 
-After changing Rust code, rebuild and reopen the viewer. Close the shared sidebar before invoking its action again: repeating the action reuses the running process, so it does not load the rebuilt binary. If you change the manifest, run `herdr plugin link .` again so Herdr refreshes its action and hook registrations.
+After changing Rust code, rebuild and reopen the viewer. Close the shared sidebar before invoking its action again: repeating the action reuses the running process, so it does not load the rebuilt binary. Older running viewers must also be reopened to begin saving view and width state for tab-close recovery. If you change the manifest, run `herdr plugin link .` again so Herdr refreshes its action and hook registrations.
 
 For faster local builds with debug symbols, use `sh scripts/build.sh --debug`. This builds `target/debug/herdr-git-graph` and atomically replaces `bin/herdr-git-graph`, so an already-open viewer can keep running until you close it. Running panes continue using the old executable until reopened. The default build remains `--release`.
 
@@ -68,7 +68,7 @@ herdr plugin install sjlee06/herdr-git-graph
 
 터미널을 밝은 테마와 어두운 테마로 각각 바꾸고 그래프에서 `r`을 누르세요. 일반 행 배경이 옆 패널과 이어지는지, 선택 행이 보이는지, 곡선 배경에 검은 사각형이 없는지 확인합니다. `/` 검색·한글 입력·방향키·마우스·창 크기 변경·`q` 종료도 확인하세요. `--theme terminal`은 색상 조회 없는 대체 경로를 확인하는 옵션이며 문자 그래프를 사용합니다.
 
-공유 사이드바는 액션을 반복해도 패널이 늘어나지 않는지, 다른 탭에서 실행하면 그 탭으로 이동하는지 확인하세요. 탭 전환 시 포커스, 선택한 커밋, 스크롤, 검색, 테마와 수동 조절한 너비가 유지되는지도 확인합니다. 좁은 대상 패널에서는 너비 제한이 적용됩니다. 다른 작업 공간에는 별도의 사이드바가 열려야 하며, 사이드바 패널이나 해당 탭을 닫은 뒤에는 탭을 전환해도 다시 열리지 않아야 합니다. 새 사이드바는 액션을 다시 실행해 여세요.
+공유 사이드바는 액션을 반복해도 패널이 늘어나지 않는지, 다른 탭에서 실행하면 그 탭으로 이동하는지 확인하세요. 탭 전환 시 포커스, 선택한 커밋, 스크롤, 검색, 테마와 수동 조절한 너비가 유지되는지도 확인합니다. 좁은 대상 패널에서는 Herdr의 10–90% 분할 비율 제한으로 실제 너비가 줄어들 수 있지만, 넓은 탭으로 돌아오면 저장한 목표 너비가 복원되어야 합니다. 다른 작업 공간에는 별도의 사이드바가 열려야 합니다. `q`나 패널 닫기로 사이드바를 직접 끈 뒤에는 탭을 전환하거나 해당 탭을 닫아도 다시 열리지 않아야 합니다. 반대로 사이드바가 있는 탭을 닫으면 같은 작업 공간의 남은 탭에 하나만 다시 열려야 합니다. 이때 새 프로세스에서 원래 저장소와 테마, 선택·스크롤·검색 상태, 목표 너비가 복원되는지 확인하세요. 좁은 탭을 닫은 뒤에도 줄어든 실제 너비가 아닌 목표 너비로 복구되어야 합니다. Git 저장소가 아닌 탭에서도 복구되는지, 마지막 탭을 닫으면 다른 작업 공간에 사이드바가 생기지 않는지도 확인하세요. 확대된 탭 때문에 이동이 실패하면 기존 프로세스와 확대 상태가 유지되어야 하며, 확대를 해제한 뒤 탭 전환이나 액션으로 다시 이동할 수 있어야 합니다.
 
 개인 Herdr 세션에 플러그인을 연결하지 않고 실제 실행 경로만 검증하려면 빌드 후 `python3 tests/herdr_live.py`를 실행하세요. 테스트가 별도 세션과 임시 설정을 만들고 정리합니다. 실제 바깥 터미널에서 보이는 색상·투명도·곡선의 육안 확인은 위 수동 확인이 필요합니다.
 
@@ -84,9 +84,9 @@ cargo test --locked
 sh scripts/build.sh
 ```
 
-When Herdr 0.9.5+ is installed, also run `python3 tests/herdr_live.py` after building. It starts a separate headless test session with isolated XDG directories and stops only its own test server. It checks sidebar reuse, cross-tab following and rapid switching, stable pane/terminal identity, selection/scroll and width preservation, focus, workspace isolation, close/opt-out behavior, graph output, and the full-view action. Run it when changing plugin launch or synchronization behavior; a mock CLI does not enforce Herdr's placement rules.
+When Herdr 0.9.5+ is installed, also run `python3 tests/herdr_live.py` after building. It starts a separate headless test session with isolated XDG directories and stops only its own test server. It checks sidebar reuse, cross-tab following and rapid switching, stable pane/terminal identity during moves, selection/scroll and width preservation, focus, workspace isolation, zoomed-source move failure and recovery, containing-tab close recovery of the view, active search, and target width to a non-Git tab, narrow-to-wide width restoration, recovery after closing a constrained tab, explicit close/opt-out followed by tab deletion, last-tab close, graph output, and the full-view action. Run it when changing plugin launch or synchronization behavior; a mock CLI does not enforce Herdr's placement rules.
 
-The [CI workflow](../.github/workflows/ci.yml) runs on macOS and Linux. Tests cover graph topology, real temporary Git repositories, branch filters, empty commits, detached HEAD, linked worktrees, shallow clones, Unicode search, and external-diff suppression. Working tree tests include partial staging, untracked/ignored files, renames, deletions, conflicts, unborn HEAD, bounded patches, and index preservation. Refresh tests check unchanged-status edits, selection/scroll preservation, stale responses, single pending polls, and backoff.
+The [CI workflow](../.github/workflows/ci.yml) runs on macOS and Linux. Tests cover graph topology, real temporary Git repositories, branch filters, empty commits, detached HEAD, linked worktrees, shallow clones, Unicode search, and external-diff suppression. Working tree tests include partial staging, untracked/ignored files, renames, deletions, conflicts, unborn HEAD, bounded patches, and index preservation. Refresh tests check unchanged-status edits, selection/scroll preservation, stale responses, single pending polls, and backoff. View-state tests cover selection/viewport/search/pan roundtrips, OID anchors across inserted or removed commits, empty history, malformed values, and draw-time visibility adjustments.
 
 See [validation notes](VALIDATION.md) for recorded results and live terminal testing coverage.
 
@@ -129,12 +129,19 @@ This standalone export has a 40-column content area; the full-terminal image use
 | `src/theme.rs` | Native/classic styles, OSC color parsing, shared RGB palette |
 | `src/theme_probe.rs` | Asynchronous terminal queries and color-reply filtering |
 | `src/herdr.rs` | Repository context, plugin pane launch, and sidebar sizing |
-| `src/herdr/sidebar.rs` | Workspace-shared sidebar registry, file locking, reuse, and tab-focus synchronization |
+| `src/herdr/sidebar.rs` | Workspace-shared sidebar registry, file locking, viewer snapshots, width tracking, reuse, and tab synchronization/recovery |
+| `src/herdr/view_state.rs` | History-view JSON snapshots and safe OID-anchored restoration |
 | `tests/repository.rs` | Integration tests using temporary Git repositories |
 | `tests/herdr.rs` | Launcher arguments, shared-sidebar reuse/movement, workspace/session isolation, concurrent opens, stale records, and CLI errors |
 | `tests/herdr_live.py` | Optional real Herdr action and pane integration in an isolated session |
 
-The shared-sidebar registry uses hashed `.json` and `.lock` filenames under `$HERDR_PLUGIN_STATE_DIR/shared-sidebars/`, keyed by Herdr server socket and workspace. When that variable is unset, it falls back to `$XDG_STATE_HOME/herdr-git-graph/shared-sidebars/` or `$HOME/.local/state/herdr-git-graph/shared-sidebars/`. A file lock serializes sidebar actions and synchronization hooks. Recorded pane and terminal IDs are checked against live panes before reuse. Synchronization clears stale records without reopening the sidebar; a later explicit action creates a new one. Only the sidebar action registers panes for sharing, not direct pane opens or standalone `--sidebar` runs.
+The shared-sidebar registry uses hashed `.json` and `.lock` filenames under `$HERDR_PLUGIN_STATE_DIR/shared-sidebars/`, keyed by Herdr server socket and workspace. When that variable is unset, it falls back to `$XDG_STATE_HOME/herdr-git-graph/shared-sidebars/` or `$HOME/.local/state/herdr-git-graph/shared-sidebars/`. A file lock serializes sidebar actions, synchronization hooks, and viewer updates. Records contain pane, terminal, and containing-tab IDs, the original repository and theme, and `width`, `actual_width`, and `view` fields.
+
+`width` is the target outer width, initially 40 columns; `actual_width` tracks the constrained geometry. Initial sizing and moves use Herdr's 10–90% split-ratio limits, without a separate half-target-pane cap. A move or recreation saves its constrained actual width without replacing the target, so a narrow destination does not prevent width restoration on a wider tab. Later user/host geometry changes update the target. `view` stores `selected_oid` and `top_oid` with `selected` and `top` index fallbacks, plus `graph_offset`, `query`, and `searching`. Restoration finds the saved OIDs in the newly loaded history, falls back to clamped indices, and bounds the horizontal offset. `ui::draw` adjusts selection visibility for the new terminal height; sidebar state does not include branch filters or detail panels.
+
+Action-managed viewers receive the internal `HERDR_GIT_GRAPH_SHARED=1` marker and use `SidebarSession` to restore and save the matching record. Direct pane opens and standalone `--sidebar` runs do not participate. The viewer saves after the initial draw and when persisted UI state changes. It checks Herdr geometry on terminal resize and once per second, including logical layout changes without a PTY resize, and does not rewrite unchanged records. Viewers already running an older binary must be closed and reopened to enable this persistence.
+
+Pane and terminal IDs are checked against live panes before reuse. When a pane is missing but its tab remains, synchronization clears the record without reopening. When the containing tab has been deleted and a valid destination remains in the same workspace, it creates one new process on the focused workspace's active tab using the saved launch settings, view, and target width. This is not server-restart/session recovery; pane/terminal identity guards reject stale reused IDs. `tab.closed` hooks also run synchronization because closing a tab need not emit a focus event. `pane.closed` and `pane.exited` hooks clear matching records for explicit opt-out, and the viewer clears its record before an explicit quit; delayed events for old panes do not clear replacements. Removed workspaces and legacy records without recovery settings are cleared, not restored. Missing newer view/width fields use safe defaults. Recreation can briefly change the layout, and cross-tab moves remain subject to Herdr's zoom restrictions; the plugin does not automatically unzoom tabs.
 
 Graph layout is separate from rendering. Keep parent relationships intact across branch filtering and commit limits, and retain terminal cleanup and text fallback when changing rendering code.
 

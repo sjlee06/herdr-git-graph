@@ -64,10 +64,16 @@ with open(os.environ['HGG_SIMULATOR'] + '.lock', 'a') as lock:
         result = {'panes': [live(p) for p in panes if p['workspace_id'] == workspace]}
     elif args[:2] == ['workspace', 'get']:
         result = {'workspace': session['workspaces'][args[2]]}
+    elif args[:2] == ['workspace', 'list']:
+        result = {'workspaces': list(session['workspaces'].values())}
+    elif args[:2] == ['tab', 'list']:
+        workspace = flag('--workspace')
+        result = {'tabs': [{'tab_id': tab, 'workspace_id': workspace}
+                           for tab in session['tabs'] if tab.startswith(workspace + ':')]}
     elif args[:2] == ['pane', 'layout']:
         pane = next(p for p in panes if p['pane_id'] == flag('--pane'))
         total = session['tabs'][pane['tab_id']]['width']
-        sidebar = next((p for p in panes if p.get('source_pane_id') and
+        sidebar = next((p for p in reversed(panes) if p.get('source_pane_id') and
                         p['tab_id'] == pane['tab_id']), None)
         area = {'x': 0, 'y': 0, 'width': total, 'height': 30}
         if sidebar:
@@ -184,6 +190,8 @@ impl Fixture {
             .env("HERDR_PANE_ID", "w-test:p-source")
             .env("HGG_SIMULATOR", &self.simulator)
             .env_remove("HERDR_PLUGIN_CONTEXT_JSON")
+            .env_remove("HERDR_PLUGIN_EVENT")
+            .env_remove("HERDR_PLUGIN_EVENT_JSON")
             .env_remove("HERDR_GIT_GRAPH_REPO")
             .env_remove("HERDR_GIT_GRAPH_THEME")
             .env_remove("HERDR_PLUGIN_ROOT")
@@ -314,7 +322,7 @@ fn launchers_preserve_repository_context_and_choose_the_correct_layout() {
         }
     }
     let layouts = fixture.calls(&["pane", "layout"]);
-    assert_eq!(layouts.len(), 1);
+    assert_eq!(layouts.len(), 2);
     let resizes = fixture.calls(&["pane", "resize"]);
     assert_eq!(resizes.len(), 1);
     assert_eq!(flag(&resizes[0], "--pane"), "w-test:p-source");
@@ -605,7 +613,7 @@ fn sync_does_not_move_a_sidebar_in_an_unfocused_workspace() {
 
 #[test]
 fn sync_clamps_preserved_width_for_narrow_and_wide_destinations() {
-    for (width, expected_ratio) in [(80, 0.5), (1000, 0.9)] {
+    for (width, expected_ratio) in [(40, 0.1), (80, 0.25), (1000, 0.9)] {
         let fixture = Fixture::new();
         let first = fixture.run("--open-sidebar");
         let id = pane(&first)["pane_id"].as_str().unwrap();
@@ -626,6 +634,33 @@ fn sync_clamps_preserved_width_for_narrow_and_wide_destinations() {
             (flag(&moves[0], "--ratio").parse::<f64>().unwrap() - expected_ratio).abs() < 0.0001
         );
     }
+}
+
+#[test]
+fn constrained_moves_do_not_overwrite_the_users_preferred_width() {
+    let fixture = Fixture::new();
+    let first = fixture.run("--open-sidebar");
+    let id = pane(&first)["pane_id"].as_str().unwrap();
+    fixture.update_session(|session| {
+        session["workspaces"]["w-test"]["active_tab_id"] = json!("w-test:tab-b");
+        session["tabs"]["w-test:tab-b"]["width"] = json!(40);
+        session["panes"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|pane| pane["pane_id"] == id)
+            .unwrap()["ratio"] = json!(0.7); // User asks for 60 columns.
+    });
+    fixture.run("--sync-sidebar");
+    assert!((fixture.sidebar(id)["ratio"].as_f64().unwrap() - 0.1).abs() < 0.0001);
+    fixture.update_session(|session| {
+        session["workspaces"]["w-test"]["active_tab_id"] = json!("w-test:tab-a");
+    });
+    fixture.run("--sync-sidebar");
+    assert!(
+        (fixture.sidebar(id)["ratio"].as_f64().unwrap() - 0.7).abs() < 0.0001,
+        "back on a wide tab, the sidebar must regain 60 columns, not keep the clamped 36"
+    );
 }
 
 #[test]
@@ -662,6 +697,204 @@ fn closed_or_terminal_reused_sidebar_records_are_cleared_without_respawning() {
         );
         assert_eq!(fixture.calls(&["plugin", "pane", "open"]).len(), 2);
     }
+}
+
+#[test]
+fn sync_recovers_after_containing_tab_closes_without_rediscovering_a_repository() {
+    let fixture = Fixture::new();
+    let first = successful(
+        fixture
+            .command("--open-sidebar")
+            .args(["--theme", "classic"])
+            .output()
+            .unwrap(),
+    );
+    let id = pane(&first)["pane_id"].as_str().unwrap();
+    fixture.update_session(|session| {
+        session["workspaces"]["w-test"]["active_tab_id"] = json!("w-test:tab-b");
+        session["panes"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|pane| pane["pane_id"] == id)
+            .unwrap()["ratio"] = json!(0.7);
+    });
+    fixture.run("--sync-sidebar");
+    assert_eq!(fixture.sidebar(id)["tab_id"], "w-test:tab-b");
+    fixture.update_session(|session| {
+        session["panes"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|pane| pane["tab_id"] != "w-test:tab-b");
+        session["tabs"]
+            .as_object_mut()
+            .unwrap()
+            .remove("w-test:tab-b");
+        session["workspaces"]["w-test"]["active_tab_id"] = json!("w-test:tab-a");
+    });
+    // The close event's context still points to the now-deleted tab/pane.
+    successful(fixture.command("--sync-sidebar")
+        .current_dir(fixture.temp.path())
+        .env("HERDR_GIT_GRAPH_REPO", "/missing/repository")
+        .env("HERDR_PLUGIN_EVENT", "tab.closed")
+        .env("HERDR_PLUGIN_EVENT_JSON", r#"{"event":"tab.closed","data":{"type":"tab_closed","workspace_id":"w-test","tab_id":"w-test:tab-b"}}"#)
+        .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"workspace_id":"w-test","focused_pane_id":"w-test:p-other"}"#)
+        .output().unwrap());
+    let opens = fixture.calls(&["plugin", "pane", "open"]);
+    assert_eq!(opens.len(), 2);
+    assert_eq!(flag(&opens[1], "--target-pane"), "w-test:p-source");
+    assert_eq!(flag(&opens[1], "--cwd"), fixture.repo.to_str().unwrap());
+    assert!(
+        opens[1]
+            .windows(2)
+            .any(|pair| pair == ["--env", "HERDR_GIT_GRAPH_THEME=classic"])
+    );
+    fixture.run("--sync-sidebar");
+    assert_eq!(fixture.calls(&["plugin", "pane", "open"]).len(), 2);
+    let reused = fixture.run("--open-sidebar");
+    assert_ne!(pane(&reused)["terminal_id"], pane(&first)["terminal_id"]);
+    assert_eq!(pane(&reused)["tab_id"], "w-test:tab-a");
+    assert!(
+        (fixture.sidebar(pane(&reused)["pane_id"].as_str().unwrap())["ratio"]
+            .as_f64()
+            .unwrap()
+            - 0.7)
+            .abs()
+            < 0.0001,
+        "a replacement must restore the preferred 60-column width"
+    );
+}
+
+#[test]
+fn direct_sidebar_close_opts_out_even_if_its_tab_is_closed_before_the_hook_runs() {
+    for event in ["pane.closed", "pane.exited"] {
+        let fixture = Fixture::new();
+        let first = fixture.run("--open-sidebar");
+        fixture.update_session(|session| {
+            session["panes"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|pane| pane["tab_id"] != "w-test:tab-a");
+            session["tabs"]
+                .as_object_mut()
+                .unwrap()
+                .remove("w-test:tab-a");
+            session["workspaces"]["w-test"]["active_tab_id"] = json!("w-test:tab-b");
+        });
+        successful(
+            fixture
+                .command("--sync-sidebar")
+                .env("HERDR_PLUGIN_EVENT", event)
+                .env(
+                    "HERDR_PLUGIN_EVENT_JSON",
+                    json!({"event": event, "data": {
+                        "workspace_id": "w-test", "pane_id": pane(&first)["pane_id"]
+                    }})
+                    .to_string(),
+                )
+                .output()
+                .unwrap(),
+        );
+        fixture.run("--sync-sidebar");
+        assert_eq!(fixture.calls(&["plugin", "pane", "open"]).len(), 1);
+    }
+}
+
+#[test]
+fn closing_the_last_tab_does_not_attempt_to_reopen_a_sidebar_in_another_workspace() {
+    let fixture = Fixture::new();
+    fixture.run("--open-sidebar");
+    fixture.update_session(|session| {
+        session["workspaces"]
+            .as_object_mut()
+            .unwrap()
+            .remove("w-test");
+        session["panes"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|pane| pane["workspace_id"] != "w-test");
+    });
+    fixture.run("--sync-sidebar");
+    assert_eq!(fixture.calls(&["plugin", "pane", "open"]).len(), 1);
+    let calls = fixture.calls(&[]).len();
+    fixture.run("--sync-sidebar");
+    assert_eq!(
+        fixture.calls(&[]).len(),
+        calls,
+        "removed workspace must clear its record"
+    );
+}
+
+#[test]
+fn concurrent_close_and_focus_hooks_restore_exactly_one_sidebar() {
+    let fixture = Fixture::new();
+    let first = fixture.run("--open-sidebar");
+    fixture.update_session(|session| {
+        session["panes"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|pane| pane["tab_id"] != "w-test:tab-a");
+        session["tabs"]
+            .as_object_mut()
+            .unwrap()
+            .remove("w-test:tab-a");
+        session["workspaces"]["w-test"]["active_tab_id"] = json!("w-test:tab-b");
+    });
+    let barrier = Arc::new(Barrier::new(6));
+    let threads: Vec<_> = (0..6)
+        .map(|index| {
+            let mut command = fixture.command("--sync-sidebar");
+            command.env("HGG_OPEN_DELAY", "0.1").env(
+                "HERDR_PLUGIN_EVENT",
+                if index % 2 == 0 {
+                    "tab.closed"
+                } else {
+                    "tab.focused"
+                },
+            );
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                successful(command.output().unwrap());
+            })
+        })
+        .collect();
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    assert_eq!(fixture.calls(&["plugin", "pane", "open"]).len(), 2);
+    let replacement = successful(
+        fixture
+            .command("--open-sidebar")
+            .env("HERDR_PANE_ID", "w-test:p-other")
+            .output()
+            .unwrap(),
+    );
+    // An unrelated or delayed exit event must not discard the replacement.
+    successful(
+        fixture
+            .command("--sync-sidebar")
+            .env("HERDR_PLUGIN_EVENT", "pane.exited")
+            .env("HERDR_PLUGIN_CONTEXT_JSON", r#"{"workspace_id":"w-other"}"#)
+            .env(
+                "HERDR_PLUGIN_EVENT_JSON",
+                json!({"data": {
+                    "workspace_id": "w-test", "pane_id": pane(&first)["pane_id"]
+                }})
+                .to_string(),
+            )
+            .output()
+            .unwrap(),
+    );
+    let reused = successful(
+        fixture
+            .command("--open-sidebar")
+            .env("HERDR_PANE_ID", "w-test:p-other")
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(pane(&replacement), pane(&reused));
+    assert_eq!(fixture.calls(&["plugin", "pane", "open"]).len(), 2);
 }
 
 #[test]
