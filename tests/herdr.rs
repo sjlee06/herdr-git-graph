@@ -529,6 +529,100 @@ fn sidebar_toggle_opens_closes_and_reopens_without_hook_resurrection() {
 }
 
 #[test]
+fn sidebar_toggle_remembers_the_latest_width_for_toggle_and_open() {
+    for reopen_mode in ["--toggle-sidebar", "--open-sidebar"] {
+        let fixture = Fixture::new();
+        let mut current = fixture.run("--toggle-sidebar");
+        for ratio in [0.7, 0.6] {
+            let id = pane(&current)["pane_id"].as_str().unwrap();
+            // Resize immediately before closing, without a viewer state update.
+            fixture.update_session(|session| {
+                session["panes"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|p| p["pane_id"] == id)
+                    .unwrap()["ratio"] = json!(ratio);
+            });
+            fixture.run("--toggle-sidebar");
+            let open_count = fixture.calls(&["plugin", "pane", "open"]).len();
+            fixture.run("--sync-sidebar");
+            assert_eq!(fixture.calls(&["plugin", "pane", "open"]).len(), open_count);
+            current = fixture.run(reopen_mode);
+            let reopened_id = pane(&current)["pane_id"].as_str().unwrap();
+            let actual = fixture.sidebar(reopened_id)["ratio"].as_f64().unwrap();
+            assert!(
+                (actual - ratio).abs() < 0.0001,
+                "{reopen_mode}: expected {ratio}, got {actual}"
+            );
+        }
+        let other = successful(
+            fixture
+                .command("--toggle-sidebar")
+                .env("HERDR_WORKSPACE_ID", "w-other")
+                .env("HERDR_PANE_ID", "w-other:p-source")
+                .output()
+                .unwrap(),
+        );
+        assert!(
+            (fixture.sidebar(pane(&other)["pane_id"].as_str().unwrap())["ratio"]
+                .as_f64()
+                .unwrap()
+                - 0.8)
+                .abs()
+                < 0.0001
+        );
+    }
+}
+
+#[test]
+fn sidebar_toggle_preserves_preferred_width_when_reopened_in_a_narrow_tab() {
+    let fixture = Fixture::new();
+    let first = fixture.run("--open-sidebar");
+    let id = pane(&first)["pane_id"].as_str().unwrap();
+    fixture.update_session(|session| {
+        session["workspaces"]["w-test"]["active_tab_id"] = json!("w-test:tab-b");
+        session["tabs"]["w-test:tab-b"]["width"] = json!(40);
+        session["panes"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|p| p["pane_id"] == id)
+            .unwrap()["ratio"] = json!(0.7);
+    });
+    fixture.run("--sync-sidebar");
+    assert!((fixture.sidebar(id)["ratio"].as_f64().unwrap() - 0.1).abs() < 0.0001);
+    fixture.run("--toggle-sidebar");
+    let narrow = successful(
+        fixture
+            .command("--toggle-sidebar")
+            .env("HERDR_PANE_ID", "w-test:p-other")
+            .output()
+            .unwrap(),
+    );
+    assert!(
+        (fixture.sidebar(pane(&narrow)["pane_id"].as_str().unwrap())["ratio"]
+            .as_f64()
+            .unwrap()
+            - 0.1)
+            .abs()
+            < 0.0001
+    );
+    fixture.run("--toggle-sidebar");
+    fixture.update_session(|session| {
+        session["workspaces"]["w-test"]["active_tab_id"] = json!("w-test:tab-a");
+    });
+    let wide = fixture.run("--toggle-sidebar");
+    let actual = fixture.sidebar(pane(&wide)["pane_id"].as_str().unwrap())["ratio"]
+        .as_f64()
+        .unwrap();
+    assert!(
+        (actual - 0.7).abs() < 0.0001,
+        "expected 60 columns after a constrained toggle, got ratio {actual}"
+    );
+}
+
+#[test]
 fn sidebar_toggle_close_failure_keeps_the_saved_sidebar() {
     let fixture = Fixture::new();
     let first = fixture.run("--open-sidebar");

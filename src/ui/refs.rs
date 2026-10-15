@@ -35,11 +35,7 @@ impl Badge {
         let color = match self.kind {
             Kind::Current | Kind::Local => theme.accent(),
             Kind::Tag => theme.highlight(),
-            Kind::Remote => theme
-                .muted()
-                .fg
-                .filter(|color| *color != ratatui::style::Color::Reset)
-                .unwrap_or(theme.hunk()),
+            Kind::Remote => theme.hunk(),
         };
         theme.badge(color, self.kind == Kind::Current)
     }
@@ -165,6 +161,43 @@ mod tests {
             badges(&repo.commits[0], &repo.branches)[0].kind,
             Kind::Remote
         );
+    }
+
+    #[test]
+    fn remote_badges_use_the_magenta_palette_in_every_theme() {
+        use crate::theme::ThemeMode;
+        use ratatui::style::{Color, Modifier};
+
+        let native = |bg, fg| Theme {
+            background: Some(bg),
+            foreground: Some(fg),
+            palette: [
+                None,
+                None,
+                Some((190, 140, 30)),
+                None,
+                Some((150, 80, 200)),
+                Some((20, 150, 150)),
+            ],
+            ..Theme::default()
+        };
+        for theme in [
+            Theme::new(ThemeMode::Classic),
+            Theme::new(ThemeMode::Terminal),
+            native((250, 250, 250), (30, 30, 30)),
+            native((20, 20, 20), (230, 230, 230)),
+        ] {
+            let remote = Badge {
+                name: "origin/main".into(),
+                kind: Kind::Remote,
+            }
+            .style(theme);
+            assert_eq!(remote, theme.badge(theme.hunk(), false));
+            assert_ne!(remote, theme.badge(theme.accent(), false));
+            assert_ne!(remote, theme.badge(theme.highlight(), false));
+            assert!(!remote.add_modifier.contains(Modifier::DIM));
+            assert_ne!(remote.fg, Some(Color::Reset));
+        }
     }
 
     #[test]

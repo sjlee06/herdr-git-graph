@@ -81,7 +81,7 @@ command = "herdr.git-graph.toggle-sidebar"
 description = "Toggle Git Graph Sidebar"
 ```
 
-Run `herdr config check`, then `herdr server reload-config`. Press your prefix followed by `u` for the full view or `Shift+u` to toggle the sidebar: open it when closed, or close it when already open. Closing this way also stops tab-following until the next open. The `herdr.git-graph.sidebar` action remains open-only and reuses an existing sidebar.
+Run `herdr config check`, then `herdr server reload-config`. Press your prefix followed by `u` for the full view or `Shift+u` to toggle the sidebar: open it when closed, or close it when already open. Closing this way remembers the last chosen width and stops tab-following until the next open. Reopening restores that width where space allows. The `herdr.git-graph.sidebar` action remains open-only and reuses an existing sidebar.
 
 ## Use
 

@@ -82,6 +82,26 @@ impl SidebarState {
         Ok(())
     }
 
+    fn saved_width(&self) -> Result<u16> {
+        match fs::read_to_string(self.path.with_extension("width")) {
+            Ok(value) => value
+                .trim()
+                .parse()
+                .context("저장된 사이드바 너비가 올바르지 않습니다."),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(SIDEBAR_WIDTH),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn save_width(&self, width: u16) -> Result<()> {
+        // Keep only the width preference after opt-out, separate from the active
+        // pane registration so close/focus hooks cannot revive the sidebar.
+        let temporary = self.path.with_extension("width.tmp");
+        fs::write(&temporary, width.to_string())?;
+        fs::rename(temporary, self.path.with_extension("width"))?;
+        Ok(())
+    }
+
     fn clear(&self) -> Result<()> {
         match fs::remove_file(&self.path) {
             Ok(()) => Ok(()),
@@ -247,7 +267,10 @@ fn sidebar_action(explicit: Option<&Path>, theme: ThemeMode, toggle: bool) -> Re
         let panes = panes(&bin, &workspace)?;
         if let Some(pane) = saved_pane(&panes, &record) {
             if toggle {
+                let mut record = record.clone();
+                remember_width(&mut record, pane_width(&bin, string(&pane, "pane_id")?)?);
                 let closed = request(&bin, &["pane", "close", string(&pane, "pane_id")?])?;
+                state.save_width(preferred_width(&record))?;
                 // Keep the lock through close and opt-out so tab/pane hooks
                 // cannot recreate a sidebar the user has just toggled off.
                 state.clear()?;
@@ -272,7 +295,8 @@ fn sidebar_action(explicit: Option<&Path>, theme: ThemeMode, toggle: bool) -> Re
         state.clear()?;
     }
     let root = super::repository_path(explicit)?;
-    let output = create_sidebar(&state, &root, theme, &source, None)?;
+    let preferences = json!({"width": state.saved_width()?});
+    let output = create_sidebar(&state, &root, theme, &source, Some(&preferences))?;
     std::io::stdout().write_all(&output)?;
     Ok(())
 }

@@ -81,7 +81,7 @@ command = "herdr.git-graph.toggle-sidebar"
 description = "Toggle Git Graph Sidebar"
 ```
 
-`herdr config check`로 충돌을 확인하고 `herdr server reload-config`를 실행하세요. 설정한 prefix 다음 `u`는 전체 그래프를 엽니다. `Shift+u`는 사이드바가 없으면 열고, 이미 열려 있으면 닫습니다. 이렇게 닫으면 다시 열기 전까지 탭을 전환해도 사이드바가 따라오지 않습니다. 기존 `herdr.git-graph.sidebar` 액션은 열린 사이드바를 재사용하는 열기 전용 액션으로 유지됩니다.
+`herdr config check`로 충돌을 확인하고 `herdr server reload-config`를 실행하세요. 설정한 prefix 다음 `u`는 전체 그래프를 엽니다. `Shift+u`는 사이드바가 없으면 열고, 이미 열려 있으면 닫습니다. 이렇게 닫으면 마지막으로 조절한 너비를 기억하고, 다시 열기 전까지 탭을 전환해도 사이드바가 따라오지 않습니다. 다시 열 때는 공간이 허용하는 범위에서 저장된 너비를 복원합니다. 기존 `herdr.git-graph.sidebar` 액션은 열린 사이드바를 재사용하는 열기 전용 액션으로 유지됩니다.
 
 ## 사용법
 

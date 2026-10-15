@@ -534,7 +534,43 @@ def verify(base, herdr):
                        for item in data("workspace", "list")["workspaces"])
             assert data("pane", "get", other_sidebar["pane_id"])["pane"]["terminal_id"] == \
                 other_sidebar["terminal_id"]
+            # Toggle width preferences outlive the active pane registration.
+            # A constrained reopen must not replace the preferred wide size.
+            toggle_workspace = data("workspace", "create", "--cwd", str(repo),
+                                    "--label", "Toggle width", "--focus")
+            toggle_workspace_id = toggle_workspace["workspace"]["workspace_id"]
+            wide_tab = toggle_workspace["tab"]["tab_id"]
+            wide_source = toggle_workspace["root_pane"]["pane_id"]
+            graph = invoke("toggle-sidebar")
+            shared_at(graph, toggle_workspace_id, wide_tab, wide_source, {wide_source}, 40)
+            run("pane", "resize", "--pane", graph["pane_id"], "--direction", "left",
+                "--amount", "0.05")
+            preferred = width(layout(graph["pane_id"]), graph["pane_id"])
+            assert preferred > 40, preferred
+            invoke_result("toggle-sidebar")
+            assert {pane["pane_id"] for pane in panes(toggle_workspace_id)} == {wide_source}
+            graph = invoke("toggle-sidebar")
+            shared_at(graph, toggle_workspace_id, wide_tab, wide_source, {wide_source}, preferred)
+            invoke_result("toggle-sidebar")
+
+            constrained_tab, constrained_source = create_tab(toggle_workspace_id,
+                                                              "Constrained toggle", repo)
+            total = width(layout(constrained_source), constrained_source)
+            data("pane", "split", "--pane", constrained_source, "--direction", "right",
+                 "--ratio", str(40 / total), "--cwd", str(repo), "--no-focus")
+            focus_tabs(constrained_tab)
+            ordinary = {pane["pane_id"] for pane in panes(toggle_workspace_id)}
+            graph = invoke("toggle-sidebar")
+            assert width(layout(graph["pane_id"]), graph["pane_id"]) < preferred
+            invoke_result("toggle-sidebar")
+            focus_tabs(wide_tab)
+            assert {pane["pane_id"] for pane in panes(toggle_workspace_id)} == ordinary
+            graph = invoke("toggle-sidebar")
+            shared_at(graph, toggle_workspace_id, wide_tab, wide_source, ordinary, preferred)
+            assert data("pane", "get", other_sidebar["pane_id"])["pane"]["terminal_id"] == \
+                other_sidebar["terminal_id"]
             print("PASS: isolated Herdr shared sidebar; toggle open/close/reopen and hook opt-out; "
+                  "last toggle width persists, including constrained-to-wide reopen; "
                   "repeated/non-Git actions; tab moves/back/rapid focus; "
                   "stable pane/terminal, selection/scroll, manual width and source focus; "
                   "independent workspace; q/manual close opt-out; full-view action; "
