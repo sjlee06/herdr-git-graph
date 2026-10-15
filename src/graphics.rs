@@ -46,14 +46,14 @@ pub fn rasterize(graph: &Graph, view: Viewport, cell: (u32, u32), theme: Theme) 
     let cw = cell.0 as f32;
     let ch = cell.1 as f32;
     let x = |column: usize| (column as f32 * 3.0 + 1.5 - view.column_offset as f32) * cw;
-    let visible = usize::from(view.area.height).div_ceil(2);
+    let visible = usize::from(view.area.height / 2);
     let mut nodes = Vec::new();
     for (index, row) in graph.rows.iter().enumerate().skip(view.top).take(visible) {
         let y = ((index - view.top) * 2) as f32 * ch;
         if index == view.selected
             && let Some(bg) = theme.selection_rgb()
         {
-            let rect = tiny_skia::Rect::from_xywh(0.0, y, width as f32, ch).unwrap();
+            let rect = tiny_skia::Rect::from_xywh(0.0, y, width as f32, 2.0 * ch).unwrap();
             let mut paint = Paint::default();
             paint.set_color_rgba8(bg.0, bg.1, bg.2, 255);
             pixmap.fill_rect(rect, &paint, Transform::identity(), None);
@@ -353,12 +353,15 @@ mod tests {
                     .alpha(),
                 0
             );
-            let pixel = image.pixel(0, 40).unwrap();
             let selected = theme.selection_rgb().unwrap();
-            assert_eq!(
-                (pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()),
-                (selected.0, selected.1, selected.2, 255)
-            );
+            for y in [40, 60] {
+                let pixel = image.pixel(0, y).unwrap();
+                assert_eq!(
+                    (pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()),
+                    (selected.0, selected.1, selected.2, 255)
+                );
+            }
+            assert_eq!(image.pixel(0, 80).unwrap().alpha(), 0);
             assert!(
                 image
                     .pixels()

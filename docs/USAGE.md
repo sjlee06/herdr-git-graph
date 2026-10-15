@@ -6,7 +6,7 @@
 
 **Branches** lists local and remote-tracking branches. Press Enter to show the commits reachable from the selected branch. Press `a` to include all local refs and the current HEAD again. Tags appear alongside commits in History.
 
-**History** displays the graph node, hash, subject, ref labels, and, when space permits, author and date. Search jumps between matching commits while preserving the full graph topology of the loaded view.
+**History** puts branch and tag badges above commit subjects. The current branch has a solid badge marked `●`; other local branches and tags use softer backgrounds, and remote branches are subdued. Remote-tracking branches, including symbolic remote HEAD aliases, keep their own badges even when they point to the same commit as a local branch. Badges are prioritized as current branch, local branches, tags, then remotes; overflow appears as `+N`. Subjects stay on one line with `…` when truncated. Hashes and complete ref labels remain in the commit inspector, not the history list. Author and date appear when space permits. Search still matches messages, authors, refs, and hashes while preserving the full graph topology of the loaded view.
 
 **Commit inspector** shows metadata, changed-file statistics, and a patch. Merge commits are compared with their first parent. Focus this panel to scroll the diff independently.
 
@@ -18,6 +18,9 @@ The full view's minimum pane size is 64 columns × 18 rows. Around 120 columns o
 # Open or reuse the workspace's shared sidebar, keeping the current focus
 herdr plugin action invoke herdr.git-graph.sidebar
 
+# Open it when closed, or close it when already open
+herdr plugin action invoke herdr.git-graph.toggle-sidebar
+
 # Open a separate, unshared sidebar pane explicitly
 herdr plugin pane open --plugin herdr.git-graph --entrypoint sidebar \
   --placement split --direction right --target-pane "$HERDR_PANE_ID" \
@@ -28,9 +31,9 @@ herdr plugin pane open --plugin herdr.git-graph --entrypoint sidebar \
 ./bin/herdr-git-graph --demo --sidebar --width 40 --height 24 --snapshot sidebar.svg
 ```
 
-The sidebar displays only the history graph and commit list, with repository and HEAD context above it. Commit subjects occupy the first line; hashes and ref labels occupy the second. The branch list, author/date columns, and diff inspector are hidden. Commit diffs are not loaded in this mode.
+The sidebar displays only the history graph and commit list, with repository and HEAD context above it. Each commit retains two terminal rows for graph connections. Commits with branch or tag badges show badges first and a one-line subject below; other commits show just the subject. Hashes are hidden. The branch list, author/date columns, and diff inspector are hidden, and commit diffs are not loaded in this mode. Use the full view to inspect complete messages, refs, and hashes.
 
-The `herdr.git-graph.sidebar` action keeps one shared sidebar per Herdr server socket and workspace. Repeating the action reuses that pane rather than creating another split. If it is on another tab, the action moves it to the invocation's source tab. Other workspaces have their own sidebar. Direct `plugin pane open` and standalone `--sidebar` launches are not registered for sharing and remain independent.
+The `herdr.git-graph.sidebar` action keeps one shared sidebar per Herdr server socket and workspace. Repeating the action reuses that pane rather than creating another split. If it is on another tab, the action moves it to the invocation's source tab. Other workspaces have their own sidebar. Direct `plugin pane open` and standalone `--sidebar` launches are not registered for sharing and remain independent. The `herdr.git-graph.toggle-sidebar` action uses the same shared sidebar: it opens one when absent, or closes the registered pane and ends sharing when present. It does not close independent sidebars or panes in another workspace. A failed close keeps the saved registration for retry.
 
 Once opened by the action, the sidebar follows tab switches: a `tab.focused` hook runs the hidden `--sync-sidebar` command to move the existing pane to the active tab with `--no-focus`. The same process keeps the selected commit, scroll position, search, and theme. This is plugin-managed movement, not native Herdr pinned-pane support, so a brief layout change is possible during a switch.
 
@@ -44,11 +47,11 @@ Closing the tab containing a shared sidebar does not end sharing if another tab 
 
 The action takes its target from the invocation's focused pane. When opening the pane explicitly, run the command above inside Herdr, or pass a known pane ID with `--target-pane`. Split panes must not use `--workspace`.
 
-Suggested bindings are `prefix+u` for `herdr.git-graph.open` and `prefix+shift+u` for `herdr.git-graph.sidebar`; see the [README config example](../README.md#add-a-keybinding). Avoid `prefix+g` (`goto`) and `prefix+shift+g` (new worktree), which Herdr already binds by default. Validate with `herdr config check` before reloading the configuration.
+Suggested bindings are `prefix+u` for `herdr.git-graph.open` and `prefix+shift+u` for `herdr.git-graph.toggle-sidebar`; see the [README config example](../README.md#add-a-keybinding). Avoid `prefix+g` (`goto`) and `prefix+shift+g` (new worktree), which Herdr already binds by default. Validate with `herdr config check` before reloading the configuration.
 
 ## Uncommitted changes and live updates
 
-When the current checkout has changes, a hollow `WIP` node labeled **Uncommitted changes** appears above HEAD. Its second line counts staged, unstaged, untracked, and conflicted files. A partially staged file contributes to both staged and unstaged counts. The node appears in the all-refs view and when filtering the checked-out local branch, including detached HEAD and repositories with no commits. Other branch filters omit it. It does not count toward `--limit` or the commit count.
+When the current checkout has changes, a hollow node labeled **Uncommitted changes** appears above HEAD. Its second line counts staged, unstaged, untracked, and conflicted files. A partially staged file contributes to both staged and unstaged counts. The node appears in the all-refs view and when filtering the checked-out local branch, including detached HEAD and repositories with no commits. Other branch filters omit it. It does not count toward `--limit` or the commit count.
 
 Select the node in the full view to see file statuses and separate staged and unstaged patches. Rename paths and conflicts are included. Untracked files are listed as `??`; their contents are not included in the patch. Ignored untracked files are omitted. The sidebar shows the node and counts without loading diffs.
 

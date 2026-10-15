@@ -1,3 +1,5 @@
+mod refs;
+
 use crate::{
     app::{App, Focus},
     graphics::Viewport,
@@ -324,13 +326,15 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
     if inner.height < 2 || inner.width < 10 {
         return None;
     }
-    let body = if app.sidebar {
+    let mut body = if app.sidebar {
         inner
     } else {
         Rect::new(inner.x, inner.y + 1, inner.width, inner.height - 1)
     };
+    // Keep each node's badge and subject visible together, including mouse targets.
+    body.height -= body.height % 2;
     app.history_area = body;
-    let count = usize::from(body.height).div_ceil(2).max(1);
+    let count = usize::from(body.height / 2).max(1);
     if app.selected < app.top {
         app.top = app.selected;
     }
@@ -358,7 +362,7 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
             col_header,
         );
         frame.render_widget(
-            Paragraph::new("COMMIT / DESCRIPTION").style(theme.muted().bg(theme.panel())),
+            Paragraph::new("REFS / COMMIT").style(theme.muted().bg(theme.panel())),
             Rect::new(cols[1].x, inner.y, cols[1].width, 1),
         );
         if cols[2].width > 0 {
@@ -401,54 +405,42 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
         };
         frame.render_widget(
             Block::default().style(Style::default().bg(bg)),
-            Rect::new(body.x, y, body.width, 1),
+            Rect::new(body.x, y, body.width, 2.min(body.bottom() - y)),
         );
-        let short: String = if commit.is_worktree() {
-            "WIP".into()
-        } else {
-            commit.oid.chars().take(7).collect()
-        };
         let is_match = !app.query.is_empty()
             && [&commit.subject, &commit.author, &commit.refs, &commit.oid]
                 .iter()
                 .any(|s| s.to_lowercase().contains(&app.query.to_lowercase()));
-        let mut spans = Vec::new();
-        if !app.sidebar {
-            spans.push(Span::styled(
-                format!("{short}  "),
-                Style::default().fg(theme.lane(app.graph.rows[i].color)),
-            ));
-        }
-        spans.push(Span::styled(
-            clean(&commit.subject),
-            Style::default()
-                .fg(if is_match {
-                    theme.highlight()
-                } else {
-                    theme.fg()
-                })
-                .patch(if selected {
-                    theme.selected_text()
-                } else {
-                    Style::default()
-                }),
-        ));
-        let line = Line::from(spans);
-        frame.render_widget(
-            Paragraph::new(line),
-            Rect::new(cols[1].x, y, cols[1].width, 1),
-        );
-        if y + 1 < body.bottom() {
-            let mut refs = Vec::new();
-            if app.sidebar {
-                refs.push(Span::styled(format!("{short} "), theme.muted()));
-            }
-            refs.push(Span::styled(
-                clean(&commit.refs),
-                Style::default().fg(theme.accent()),
-            ));
+        let badges = refs::badges(commit, &app.repo.branches);
+        let subject_y = y + u16::from(!badges.is_empty());
+        if !badges.is_empty() {
             frame.render_widget(
-                Paragraph::new(Line::from(refs)),
+                Paragraph::new(refs::line(&badges, cols[1].width, theme)),
+                Rect::new(cols[1].x, y, cols[1].width, 1),
+            );
+        }
+        if subject_y < body.bottom() {
+            frame.render_widget(
+                Paragraph::new(elide(&clean(&commit.subject), cols[1].width, false)).style(
+                    Style::default()
+                        .fg(if is_match {
+                            theme.highlight()
+                        } else {
+                            theme.fg()
+                        })
+                        .patch(if selected {
+                            theme.selected_text()
+                        } else {
+                            Style::default()
+                        }),
+                ),
+                Rect::new(cols[1].x, subject_y, cols[1].width, 1),
+            );
+        }
+        if commit.is_worktree() && y + 1 < body.bottom() {
+            frame.render_widget(
+                Paragraph::new(elide(&clean(&commit.refs), cols[1].width, false))
+                    .style(theme.muted()),
                 Rect::new(cols[1].x, y + 1, cols[1].width, 1),
             );
         }
@@ -554,9 +546,17 @@ fn details(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = b.inner(area);
     app.detail_area = area;
     frame.render_widget(b, area);
-    let lines: Vec<_> = app
-        .detail
-        .lines()
+    // Ref decorations can change while the immutable commit/diff stays cached.
+    let refs = app
+        .repo
+        .commits
+        .get(app.selected)
+        .filter(|commit| !commit.is_worktree() && !commit.refs.is_empty())
+        .map(|commit| format!("Refs: {}", commit.refs));
+    let lines: Vec<_> = refs
+        .as_deref()
+        .into_iter()
+        .chain(app.detail.lines())
         .skip(app.detail_scroll)
         .take(usize::from(inner.height))
         .map(|line| {
@@ -566,7 +566,10 @@ fn details(frame: &mut Frame, app: &mut App, area: Rect) {
                 theme.removed()
             } else if line.starts_with("@@") {
                 theme.hunk()
-            } else if line.starts_with("commit ") || line.starts_with("diff ") {
+            } else if line.starts_with("Refs: ")
+                || line.starts_with("commit ")
+                || line.starts_with("diff ")
+            {
                 theme.accent()
             } else {
                 theme.muted().fg.unwrap_or(Color::Reset)
@@ -1033,6 +1036,123 @@ mod tests {
                     .any(|cell| cell.fg == Color::Indexed(6))
             );
         }
+    }
+
+    #[test]
+    fn history_prioritizes_badges_elides_subjects_and_omits_hashes() {
+        for sidebar in [false, true] {
+            for smooth in [false, true] {
+                let mut repo = crate::git::demo();
+                repo.commits[0].subject = "한글 e\u{301} 👩‍💻 commit description ".repeat(20);
+                repo.commits[0].refs = "origin/main, tag: v1.0, HEAD -> main".into();
+                let mut app = App::new(repo, 2000, true).with_sidebar(sidebar);
+                app.theme = Theme::new(crate::theme::ThemeMode::Classic);
+                let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        draw(frame, &mut app, smooth);
+                    })
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                let history: Vec<String> = (app.history_area.y..app.history_area.bottom())
+                    .map(|y| {
+                        (app.history_area.x..app.history_area.right())
+                            .map(|x| buffer[(x, y)].symbol())
+                            .collect()
+                    })
+                    .collect();
+                assert!(history[0].contains("● main"), "{}", history[0]);
+                assert!(history[0].contains("tag: v1.0"));
+                assert!(history[0].contains("origin/main"));
+                assert!(
+                    history[1].contains('한')
+                        && history[1].contains('글')
+                        && history[1].contains('…'),
+                    "{}",
+                    history[1]
+                );
+                assert!(!history.join("\n").contains("a31c9f0"));
+                // Commits without refs stay on the node's first row.
+                assert!(history[4].contains("Add keyboard navigation"));
+                if !sidebar {
+                    let screen: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+                    assert!(screen.contains("Refs: origin/main, tag: v1.0, HEAD -> main"));
+                }
+                let badge = buffer
+                    .content
+                    .iter()
+                    .find(|cell| cell.symbol() == "●" && cell.bg == app.theme.accent());
+                assert!(badge.is_some(), "current branch needs a solid badge");
+            }
+        }
+    }
+
+    #[test]
+    fn default_sidebar_shows_local_and_remote_branches_on_the_same_commit() {
+        for branch in ["main", "develop"] {
+            let mut repo = crate::git::demo();
+            repo.head = branch.into();
+            repo.commits[0].refs = format!("HEAD -> {branch}, origin/{branch}");
+            repo.branches[0].name = branch.into();
+            repo.branches[0].reference = format!("refs/heads/{branch}");
+            let remote = repo.branches.last_mut().unwrap();
+            remote.name = format!("origin/{branch}");
+            remote.reference = format!("refs/remotes/origin/{branch}");
+            let mut app = App::new(repo, 2000, true).with_sidebar(true);
+            let lines = screen(&mut app, 40, 26);
+            let labels = &lines[usize::from(app.history_area.y)];
+            assert!(labels.contains(&format!("● {branch}")), "{labels}");
+            assert!(labels.contains(&format!("origin/{branch}")), "{labels}");
+        }
+    }
+
+    #[test]
+    fn inspector_uses_live_refs_even_when_the_commit_detail_is_cached() {
+        let mut app = App::new(crate::git::demo(), 2000, false);
+        app.detail = "commit a31c9f0\n\n    Complete cached commit message".into();
+        let before = screen(&mut app, 140, 44).join("\n");
+        assert!(before.contains("Refs: HEAD -> main, origin/main"));
+        app.repo.commits[0].refs = "HEAD -> main, tag: newly-added".into();
+        let after = screen(&mut app, 140, 44).join("\n");
+        assert!(after.contains("Refs: HEAD -> main, tag: newly-added"));
+        assert!(!after.contains("Refs: HEAD -> main, origin/main"));
+        assert!(after.contains("Complete cached commit message"));
+        assert_eq!(
+            app.detail,
+            "commit a31c9f0\n\n    Complete cached commit message"
+        );
+    }
+
+    #[test]
+    fn selected_commit_keeps_its_subject_visible_at_odd_sidebar_heights() {
+        for width in [24, 40] {
+            for height in [9, 13, 25] {
+                let mut app = App::new(crate::git::demo(), 2000, true).with_sidebar(true);
+                app.selected = 1;
+                app.theme = Theme::new(crate::theme::ThemeMode::Classic);
+                let lines = screen(&mut app, width, height);
+                let y = usize::from(app.history_area.y) + (app.selected - app.top) * 2;
+                assert_eq!(app.history_area.height % 2, 0);
+                assert!(y + 1 < usize::from(app.history_area.bottom()));
+                assert!(lines[y].contains("feature/"), "{}", lines[y]);
+                assert!(lines[y + 1].contains("Render"), "{}", lines[y + 1]);
+                assert!(lines[y + 1].contains('…'));
+            }
+        }
+    }
+
+    #[test]
+    fn worktree_counts_remain_secondary_text_instead_of_ref_badges() {
+        let mut repo = crate::git::demo();
+        repo.commits[0].oid = crate::git::WORKTREE_OID.into();
+        repo.commits[0].subject = "Uncommitted changes".into();
+        repo.commits[0].refs = "2 staged · 1 untracked".into();
+        let mut app = App::new(repo, 2000, true).with_sidebar(true);
+        let lines = screen(&mut app, 60, 26);
+        let y = usize::from(app.history_area.y);
+        assert!(lines[y].contains("Uncommitted changes"));
+        assert!(lines[y + 1].contains("2 staged · 1 untracked"));
+        assert!(!lines[y].contains("WIP"));
     }
 
     #[test]

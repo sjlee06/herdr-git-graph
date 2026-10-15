@@ -1,7 +1,7 @@
 mod sidebar;
 mod view_state;
 
-pub use sidebar::{SidebarSession, open_sidebar, sync_sidebar};
+pub use sidebar::{SidebarSession, open_sidebar, sync_sidebar, toggle_sidebar};
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;

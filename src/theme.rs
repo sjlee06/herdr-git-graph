@@ -115,6 +115,54 @@ impl Theme {
         }
     }
 
+    pub fn badge(self, color: Color, prominent: bool) -> Style {
+        let resolved = match color {
+            Color::Rgb(r, g, b) => Some((r, g, b)),
+            Color::Indexed(i @ 1..=6) => self.palette[usize::from(i - 1)],
+            _ => None,
+        };
+        if prominent {
+            if let Some((r, g, b)) = resolved {
+                let [r, g, b] = [r, g, b].map(|channel| {
+                    let value = f64::from(channel) / 255.0;
+                    if value <= 0.04045 {
+                        value / 12.92
+                    } else {
+                        ((value + 0.055) / 1.055).powf(2.4)
+                    }
+                });
+                let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                let text = if luminance > 0.179 {
+                    Color::Rgb(0, 0, 0)
+                } else {
+                    Color::Rgb(255, 255, 255)
+                };
+                return Style::default()
+                    .bg(color)
+                    .fg(text)
+                    .add_modifier(Modifier::BOLD);
+            }
+        } else {
+            let colors = if self.mode == ThemeMode::Classic {
+                Some((CLASSIC_BG, CLASSIC_FG))
+            } else {
+                self.background.zip(self.foreground)
+            };
+            if let (Some((bg, fg)), Some(color)) = (colors, resolved) {
+                return Style::default()
+                    .bg(rgb(blend(bg, color, 18)))
+                    .fg(rgb(blend(fg, color, 45)));
+            }
+        }
+        // Without queried colors, reverse only the badge, not the whole row.
+        let style = Style::default().fg(color).add_modifier(Modifier::REVERSED);
+        if prominent {
+            style.add_modifier(Modifier::BOLD)
+        } else {
+            style
+        }
+    }
+
     pub fn accent(self) -> Color {
         self.semantic(5)
     }
@@ -246,6 +294,39 @@ mod tests {
         ] {
             assert_eq!(parse_rgb(invalid), None);
         }
+    }
+
+    #[test]
+    fn badges_stand_out_without_changing_native_panel_backgrounds() {
+        for (bg, fg) in [
+            ((250, 250, 250), (30, 30, 30)),
+            ((20, 20, 20), (230, 230, 230)),
+        ] {
+            let theme = Theme {
+                background: Some(bg),
+                foreground: Some(fg),
+                palette: [Some((51, 170, 136)); 6],
+                ..Theme::default()
+            };
+            let current = theme.badge(theme.accent(), true);
+            let local = theme.badge(theme.accent(), false);
+            assert_eq!(current.bg, Some(theme.accent()));
+            assert!(current.add_modifier.contains(Modifier::BOLD));
+            assert_eq!(current.fg, Some(Color::Rgb(0, 0, 0)));
+            assert_ne!(local.bg, Some(Color::Reset));
+            assert_ne!(local.bg, current.bg);
+            assert!(!local.add_modifier.contains(Modifier::REVERSED));
+            assert_eq!(theme.bg(), Color::Reset);
+            assert_eq!(theme.panel(), Color::Reset);
+        }
+        let theme = Theme::default();
+        let current = theme.badge(theme.accent(), true);
+        assert!(
+            current
+                .add_modifier
+                .contains(Modifier::REVERSED | Modifier::BOLD)
+        );
+        assert_eq!(theme.bg(), Color::Reset);
     }
 
     #[test]

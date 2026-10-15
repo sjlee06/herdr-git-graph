@@ -20,6 +20,12 @@ title = "Open Git Graph Sidebar"
 contexts = ["workspace"]
 command = ["./bin/herdr-git-graph", "--open-sidebar"]
 
+[[actions]]
+id = "toggle-sidebar"
+title = "Toggle Git Graph Sidebar"
+contexts = ["workspace"]
+command = ["./bin/herdr-git-graph", "--toggle-sidebar"]
+
 [[events]]
 on = "tab.focused"
 command = ["./bin/herdr-git-graph", "--sync-sidebar"]

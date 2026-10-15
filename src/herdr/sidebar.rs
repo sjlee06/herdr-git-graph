@@ -227,7 +227,15 @@ fn create_sidebar(
     Ok(output)
 }
 
-pub fn open_sidebar(explicit: Option<&Path>, theme: crate::theme::ThemeMode) -> Result<()> {
+pub fn open_sidebar(explicit: Option<&Path>, theme: ThemeMode) -> Result<()> {
+    sidebar_action(explicit, theme, false)
+}
+
+pub fn toggle_sidebar(explicit: Option<&Path>, theme: ThemeMode) -> Result<()> {
+    sidebar_action(explicit, theme, true)
+}
+
+fn sidebar_action(explicit: Option<&Path>, theme: ThemeMode, toggle: bool) -> Result<()> {
     let context = plugin_context();
     let source = context_id(&context, "focused_pane_id", "HERDR_PANE_ID")
         .context("사이드바를 열 대상 패널이 없습니다. Herdr 패널 안에서 액션을 실행하세요.")?;
@@ -238,6 +246,14 @@ pub fn open_sidebar(explicit: Option<&Path>, theme: crate::theme::ThemeMode) -> 
     if let Some(record) = state.read()? {
         let panes = panes(&bin, &workspace)?;
         if let Some(pane) = saved_pane(&panes, &record) {
+            if toggle {
+                let closed = request(&bin, &["pane", "close", string(&pane, "pane_id")?])?;
+                // Keep the lock through close and opt-out so tab/pane hooks
+                // cannot recreate a sidebar the user has just toggled off.
+                state.clear()?;
+                serde_json::to_writer(std::io::stdout(), &closed)?;
+                return Ok(());
+            }
             let target = panes
                 .iter()
                 .find(|pane| pane["pane_id"] == source)

@@ -66,7 +66,7 @@ def verify(base, herdr):
         return data("plugin", "log", "list", "--plugin", "herdr.git-graph",
                     "--limit", "200")["logs"]
 
-    def invoke(action):
+    def invoke_result(action):
         result = data("plugin", "action", "invoke", "herdr.git-graph." + action)
         log_id = result["log"]["log_id"]
         log = wait_for(
@@ -74,7 +74,10 @@ def verify(base, herdr):
             lambda: next((item for item in logs() if item["log_id"] == log_id), None),
             lambda item: item is not None and item["status"] != "running")
         assert log["status"] == "succeeded", log
-        return json.loads(log["stdout"])["result"]["plugin_pane"]["pane"]
+        return json.loads(log["stdout"])["result"]
+
+    def invoke(action):
+        return invoke_result(action)["plugin_pane"]["pane"]
 
     def hooks_since(previous, minimum=1, expected_status="succeeded", event="tab.focused"):
         # For negative assertions (after closing), waiting for the actual hooks
@@ -229,6 +232,27 @@ def verify(base, herdr):
             assert repeated["terminal_id"] == sidebar["terminal_id"], repeated
             assert layout(source)["focused_pane_id"] == sidebar["pane_id"]
             assert len(panes(workspace)) == 2, panes(workspace)
+
+            # A shortcut-style toggle closes the focused sidebar, opts out of
+            # tab hooks, and opens a new shared sidebar on the next invocation.
+            previous = {item["log_id"] for item in logs()}
+            invoke_result("toggle-sidebar")
+            hooks_since(previous, event="pane.closed")
+            assert {pane["pane_id"] for pane in panes(workspace)} == {source}
+            assert not saved_view(sidebar)
+            toggle_tab, _ = create_tab(workspace, "Toggle stays closed", base)
+            focus_tabs(toggle_tab, source_tab)
+            assert len(panes(workspace)) == 2, panes(workspace)
+            previous = {item["log_id"] for item in logs()}
+            run("tab", "close", toggle_tab)
+            hooks_since(previous, event="tab.closed")
+            assert {pane["pane_id"] for pane in panes(workspace)} == {source}
+            replacement = invoke("toggle-sidebar")
+            assert replacement["terminal_id"] != sidebar["terminal_id"], replacement
+            sidebar = replacement
+            shared_at(sidebar, workspace, source_tab, source, {source}, 40)
+            wait_for("toggled-on graph output", lambda: read_graph(sidebar["pane_id"]),
+                     lambda text: "GIT GRAPH" in text and "Uncommitted changes" in text)
 
             # Move well beyond the initial viewport and retain both the footer
             # selection index and visible history subjects across tab moves.
@@ -510,7 +534,8 @@ def verify(base, herdr):
                        for item in data("workspace", "list")["workspaces"])
             assert data("pane", "get", other_sidebar["pane_id"])["pane"]["terminal_id"] == \
                 other_sidebar["terminal_id"]
-            print("PASS: isolated Herdr shared sidebar; repeated/non-Git actions; tab moves/back/rapid focus; "
+            print("PASS: isolated Herdr shared sidebar; toggle open/close/reopen and hook opt-out; "
+                  "repeated/non-Git actions; tab moves/back/rapid focus; "
                   "stable pane/terminal, selection/scroll, manual width and source focus; "
                   "independent workspace; q/manual close opt-out; full-view action; "
                   "zoom failure/recovery; containing-tab close restores view/search/width to non-Git tab; "

@@ -94,6 +94,14 @@ with open(os.environ['HGG_SIMULATOR'] + '.lock', 'a') as lock:
         amount = float(flag('--amount'))
         sidebar['ratio'] += amount if flag('--direction') == 'right' else -amount
         result = {'pane': live(sidebar)}
+    elif args[:2] == ['pane', 'close']:
+        assert len(args) == 3, args
+        pane = next(p for p in panes if p['pane_id'] == args[2])
+        if os.environ.get('HGG_CLOSE_EXIT') == '1':
+            code = 1
+        else:
+            panes.remove(pane)
+            result = {'closed': True, 'pane_id': args[2]}
     elif args[:2] == ['pane', 'move']:
         assert '--no-focus' in args and '--focus' not in args, args
         assert flag('--split') == 'right', args
@@ -196,6 +204,7 @@ impl Fixture {
             .env_remove("HERDR_GIT_GRAPH_THEME")
             .env_remove("HERDR_PLUGIN_ROOT")
             .env_remove("HGG_EXIT")
+            .env_remove("HGG_CLOSE_EXIT")
             .env_remove("HGG_OPEN_DELAY");
         command
     }
@@ -407,6 +416,12 @@ fn incompatible_launch_modes_are_rejected_before_opening_a_pane() {
         ["--sync-sidebar", "--open-pane"],
         ["--sync-sidebar", "--sidebar"],
         ["--sync-sidebar", "--demo"],
+        ["--toggle-sidebar", "--open-sidebar"],
+        ["--toggle-sidebar", "--open-pane"],
+        ["--toggle-sidebar", "--sync-sidebar"],
+        ["--toggle-sidebar", "--sidebar"],
+        ["--toggle-sidebar", "--demo"],
+        ["--toggle-sidebar", "--check"],
     ] {
         let output = fixture.command(flags[0]).arg(flags[1]).output().unwrap();
         assert_eq!(output.status.code(), Some(2));
@@ -467,6 +482,108 @@ fn rapid_repeated_opens_reuse_the_live_sidebar_without_resizing_it() {
     assert!(fixture.calls(&["pane", "move"]).is_empty());
     assert!(fixture.calls(&["pane", "list"]).len() >= 8);
     assert_eq!(fixture.sidebar(id)["ratio"], 0.7);
+}
+
+#[test]
+fn sidebar_toggle_opens_closes_and_reopens_without_hook_resurrection() {
+    let fixture = Fixture::new();
+    let first = fixture.run("--toggle-sidebar");
+    let id = pane(&first)["pane_id"].as_str().unwrap();
+    assert_eq!(pane(&fixture.run("--open-sidebar")), pane(&first));
+    // Closing must also work from the sidebar itself and outside a Git cwd.
+    successful(
+        fixture
+            .command_without_repo("--toggle-sidebar")
+            .env("HERDR_PANE_ID", id)
+            .current_dir(fixture.temp.path())
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        fixture.calls(&["pane", "close"]),
+        vec![vec!["pane", "close", id]]
+    );
+    fixture.update_session(|session| {
+        session["tabs"]
+            .as_object_mut()
+            .unwrap()
+            .remove("w-test:tab-a");
+        session["panes"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|p| p["tab_id"] != "w-test:tab-a");
+        session["workspaces"]["w-test"]["active_tab_id"] = json!("w-test:tab-b");
+    });
+    fixture.run("--sync-sidebar");
+    assert_eq!(fixture.calls(&["plugin", "pane", "open"]).len(), 1);
+    assert!(fixture.calls(&["pane", "move"]).is_empty());
+    let reopened = successful(
+        fixture
+            .command("--toggle-sidebar")
+            .env("HERDR_PANE_ID", "w-test:p-other")
+            .output()
+            .unwrap(),
+    );
+    assert_ne!(pane(&reopened)["pane_id"], pane(&first)["pane_id"]);
+    assert_eq!(pane(&reopened)["tab_id"], "w-test:tab-b");
+}
+
+#[test]
+fn sidebar_toggle_close_failure_keeps_the_saved_sidebar() {
+    let fixture = Fixture::new();
+    let first = fixture.run("--open-sidebar");
+    let failed = fixture
+        .command("--toggle-sidebar")
+        .env("HGG_CLOSE_EXIT", "1")
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    assert_eq!(pane(&fixture.run("--open-sidebar")), pane(&first));
+    fixture.run("--toggle-sidebar");
+    fixture.run("--sync-sidebar");
+    assert_eq!(fixture.calls(&["plugin", "pane", "open"]).len(), 1);
+    assert_eq!(fixture.calls(&["pane", "close"]).len(), 2);
+}
+
+#[test]
+fn sidebar_toggle_never_closes_a_reused_terminal_or_another_workspace() {
+    let fixture = Fixture::new();
+    let first = fixture.run("--open-sidebar");
+    let id = pane(&first)["pane_id"].as_str().unwrap();
+    fixture.update_session(|session| {
+        let reused = session["panes"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|p| p["pane_id"] == id)
+            .unwrap();
+        reused["terminal_id"] = json!("unrelated-terminal");
+    });
+    let replacement = fixture.run("--toggle-sidebar");
+    assert_ne!(pane(&replacement)["pane_id"], pane(&first)["pane_id"]);
+    assert!(fixture.calls(&["pane", "close"]).is_empty());
+    let other = successful(
+        fixture
+            .command("--toggle-sidebar")
+            .env("HERDR_WORKSPACE_ID", "w-other")
+            .env("HERDR_PANE_ID", "w-other:p-source")
+            .output()
+            .unwrap(),
+    );
+    fixture.run("--toggle-sidebar");
+    assert_eq!(fixture.sidebar(id)["terminal_id"], "unrelated-terminal");
+    assert_eq!(
+        fixture.sidebar(pane(&other)["pane_id"].as_str().unwrap())["terminal_id"],
+        pane(&other)["terminal_id"]
+    );
+    assert_eq!(
+        fixture.calls(&["pane", "close"]),
+        vec![vec![
+            "pane",
+            "close",
+            pane(&replacement)["pane_id"].as_str().unwrap()
+        ]]
+    );
 }
 
 #[test]

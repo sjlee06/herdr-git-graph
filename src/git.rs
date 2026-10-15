@@ -502,7 +502,11 @@ pub fn demo() -> Repository {
         ]
         .into_iter()
         .map(|(name, oid)| Branch {
-            reference: format!("refs/heads/{name}"),
+            reference: if name == "origin/main" {
+                format!("refs/remotes/{name}")
+            } else {
+                format!("refs/heads/{name}")
+            },
             name: name.into(),
             oid: oid.into(),
         })
