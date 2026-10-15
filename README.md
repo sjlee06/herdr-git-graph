@@ -18,6 +18,7 @@ A read-only Git graph plugin for Herdr, with a sidebar for browsing history and 
 
 ## Features
 
+- **Workspace-shared sidebar** — one sidebar follows the active tab without taking focus, keeping its view state.
 - **Branch and merge graph** — colored lanes with branch and tag labels.
 - **Diffs** — inspect commits and staged or unstaged changes in the full view.
 - **Search** — find commits by message, author, ref, or hash.
@@ -32,7 +33,7 @@ Curves need Herdr 0.9.2+ with Kitty graphics enabled and a compatible outer term
 
 ## Install
 
-Requires **Herdr 0.9.0+**, **Git 2.31+**, and `curl`. **Rust and Cargo are not required.**
+Requires **Herdr 0.9.5+**, **Git 2.31+**, and `curl`. **Rust and Cargo are not required.**
 
 Prebuilt releases support **macOS 11+** and **Linux with glibc 2.35+** (for example, Ubuntu 22.04+), on Apple Silicon/ARM64 and x86_64. For other systems, see [source builds](docs/DEVELOPMENT.md).
 
@@ -46,7 +47,9 @@ From a Herdr workspace containing a Git repository, open the sidebar beside your
 herdr plugin action invoke herdr.git-graph.sidebar
 ```
 
-Drag the divider or use `prefix+r` to resize the sidebar. Use `prefix+l` to focus it, then `q` to close.
+The action reuses one sidebar per workspace. If it is on another tab, it moves to the tab you invoked the action from; subsequent tab switches bring it along without taking focus. The same process keeps the selected commit, scroll position, search, and theme. Its width is preserved where the target pane allows, and other workspaces have their own sidebar.
+
+Drag the divider or use `prefix+r` to resize the sidebar. Use `prefix+l` to focus it, then `q` to close. Closing the pane or its containing tab also ends sharing; only another sidebar action opens it again. See the [usage guide](docs/USAGE.md#graph-only-sidebar) for sizing limits and unshared sidebar launches.
 
 ### Full view
 

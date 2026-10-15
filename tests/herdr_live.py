@@ -13,6 +13,18 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def wait_for(description, probe, ready=bool, timeout=10):
+    """Wait for an asynchronous server/plugin update, with useful diagnostics."""
+    deadline = time.monotonic() + timeout
+    observed = None
+    while time.monotonic() < deadline:
+        observed = probe()
+        if ready(observed):
+            return observed
+        time.sleep(0.1)
+    raise AssertionError(f"Timed out waiting for {description}: {observed!r}")
+
+
 def verify(base, herdr):
     env = {key: value for key, value in os.environ.items()
            if not key.startswith("HERDR_") and key != "NO_COLOR"}
@@ -32,6 +44,12 @@ def verify(base, herdr):
     subprocess.run(["git", "-C", str(repo), "add", "example.txt"], check=True)
     subprocess.run(["git", "-C", str(repo), "-c", "commit.gpgsign=false", "commit",
                     "-m", "Initial history"], check=True, capture_output=True)
+    # Enough rows to exercise selection and scroll preservation, not merely
+    # process identity. Empty commits keep this fixture small and deterministic.
+    for index in range(1, 37):
+        subprocess.run(["git", "-C", str(repo), "-c", "commit.gpgsign=false",
+                        "commit", "--allow-empty", "-m", f"History {index:02}"],
+                       check=True, capture_output=True)
     (repo / "example.txt").write_text("uncommitted\n")
 
     def run(*args, check=True):
@@ -44,29 +62,108 @@ def verify(base, herdr):
     def data(*args):
         return json.loads(run(*args).stdout)["result"]
 
+    def logs():
+        return data("plugin", "log", "list", "--plugin", "herdr.git-graph",
+                    "--limit", "200")["logs"]
+
     def invoke(action):
         result = data("plugin", "action", "invoke", "herdr.git-graph." + action)
         log_id = result["log"]["log_id"]
-        for _ in range(100):
-            logs = data("plugin", "log", "list", "--plugin", "herdr.git-graph")["logs"]
-            log = next(item for item in logs if item["log_id"] == log_id)
-            if log["status"] != "running":
-                assert log["status"] == "succeeded", log
-                return json.loads(log["stdout"])["result"]["plugin_pane"]["pane"]
-            time.sleep(0.1)
-        raise AssertionError("Plugin action did not finish")
+        log = wait_for(
+            f"{action} action completion",
+            lambda: next((item for item in logs() if item["log_id"] == log_id), None),
+            lambda item: item is not None and item["status"] != "running")
+        assert log["status"] == "succeeded", log
+        return json.loads(log["stdout"])["result"]["plugin_pane"]["pane"]
+
+    def hooks_since(previous, minimum=1, expected_status="succeeded"):
+        # For negative assertions (after closing), waiting for the actual hooks
+        # is essential: checking absence immediately after focus would race them.
+        hooks = wait_for(
+            "tab.focused hooks to finish",
+            lambda: [item for item in logs() if item.get("event") == "tab.focused"
+                     and item["log_id"] not in previous],
+            lambda items: len(items) >= minimum
+                          and all(item["status"] != "running" for item in items))
+        for hook in hooks:
+            assert hook["status"] == expected_status, hook
+            assert "--sync-sidebar" in hook["command"], hook
+            assert not (hook.get("stdout") or "").strip(), hook
+            if expected_status == "failed":
+                assert (hook.get("stderr") or "").strip(), hook
+        return hooks
+
+    def focus_tabs(*tabs, expected_status="succeeded"):
+        previous = {item["log_id"] for item in logs()}
+        # Deliberately do not wait between commands: callers can exercise rapid
+        # focus sequences whose earlier event contexts are already stale.
+        for tab in tabs:
+            run("tab", "focus", tab)
+        return hooks_since(previous, minimum=len(tabs), expected_status=expected_status)
+
+    def panes(workspace):
+        return data("pane", "list", "--workspace", workspace)["panes"]
+
+    def layout(pane):
+        return data("pane", "layout", "--pane", pane)["layout"]
+
+    def width(snapshot, pane):
+        return next(item["rect"]["width"] for item in snapshot["panes"]
+                    if item["pane_id"] == pane)
+
+    def read_graph(pane):
+        screen = run("pane", "read", pane, "--source", "visible", "--raw").stdout
+        # Some Herdr versions include SGR even without --ansi. Strip it for
+        # textual selection/viewport assertions; theme checks use raw ANSI.
+        return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", screen)
+
+    def graph_state(screen):
+        selection = re.search(r"\b(\d+)/(\d+)\s*·", screen)
+        subjects = tuple(re.findall(r"History \d{2}|Initial history|Uncommitted changes",
+                                    screen))
+        return (selection.groups(), subjects) if selection and subjects else None
+
+    def shared_at(sidebar, workspace, tab, source, ordinary, remembered_width=None):
+        def snapshot():
+            members = panes(workspace)
+            # Terminal identity also makes a failure diagnostic if Herdr ever
+            # changes its same-workspace pane-ID preservation semantics.
+            graphs = [pane for pane in members
+                      if pane["terminal_id"] == sidebar["terminal_id"]]
+            current = graphs[0] if len(graphs) == 1 else None
+            current_layout = layout(current["pane_id"]) if current else None
+            return members, current, current_layout
+
+        members, current, current_layout = wait_for(
+            f"shared sidebar in tab {tab} without stealing focus", snapshot,
+            lambda state: state[1] is not None and state[1]["tab_id"] == tab
+                          and state[2]["focused_pane_id"] == source
+                          and (remembered_width is None or
+                               abs(width(state[2], state[1]["pane_id"])
+                                   - remembered_width) <= 1))
+        assert current["pane_id"] == sidebar["pane_id"], (sidebar, current)
+        assert current["workspace_id"] == workspace, current
+        assert not current["focused"], current
+        assert {pane["pane_id"] for pane in members} == ordinary | {sidebar["pane_id"]}, members
+        assert {pane["pane_id"] for pane in current_layout["panes"]} == {
+            source, sidebar["pane_id"]}, current_layout
+        return current_layout
+
+    def create_tab(workspace, label, cwd):
+        result = data("tab", "create", "--workspace", workspace, "--cwd", str(cwd),
+                      "--label", label, "--no-focus")
+        return result["tab"]["tab_id"], result["root_pane"]["pane_id"]
 
     with (base / "server.log").open("w") as log_file:
         server = subprocess.Popen([*cli, "server"], cwd=ROOT, env=env,
                                   stdout=log_file, stderr=log_file)
         try:
-            for _ in range(50):
-                if "status: running" in run("status", "server", check=False).stdout:
-                    break
+            def server_status():
                 assert server.poll() is None, (base / "server.log").read_text()
-                time.sleep(0.1)
-            else:
-                raise AssertionError("Test server did not start")
+                return run("status", "server", check=False).stdout
+
+            wait_for("test server startup", server_status,
+                     lambda status: "status: running" in status, timeout=5)
 
             run("plugin", "link", str(ROOT))
             created = data("workspace", "create", "--cwd", str(repo),
@@ -89,17 +186,10 @@ def verify(base, herdr):
             assert sidebar["tab_id"] == source_tab, sidebar
             assert sidebar["pane_id"] != source, sidebar
             assert not sidebar["focused"], sidebar
-            layout = data("pane", "layout", "--pane", sidebar["pane_id"])["layout"]
-            graph_pane = next(p for p in layout["panes"] if p["pane_id"] == sidebar["pane_id"])
-            assert graph_pane["rect"]["width"] == 40, layout
-            assert layout["focused_pane_id"] == source, layout
-            for _ in range(50):
-                screen = run("pane", "read", sidebar["pane_id"],
-                             "--source", "visible", "--raw").stdout
-                if "GIT GRAPH" in screen:
-                    break
-                time.sleep(0.1)
-            assert "GIT GRAPH" in screen, screen
+            initial_layout = shared_at(sidebar, workspace, source_tab, source, {source}, 40)
+            assert width(initial_layout, sidebar["pane_id"]) == 40, initial_layout
+            screen = wait_for("initial graph output", lambda: read_graph(sidebar["pane_id"]),
+                              lambda text: "GIT GRAPH" in text and "Uncommitted changes" in text)
             assert "COMMIT INSPECTOR" not in screen, screen
             assert "Enlarge" not in screen, screen
             assert "Uncommitted changes" in screen, screen
@@ -107,29 +197,175 @@ def verify(base, herdr):
 
             # Auto starts with symbolic ANSI colors, then replaces lane/accent
             # colors with actual RGB replies from Herdr's pane terminal.
-            for _ in range(50):
-                ansi = run("pane", "read", sidebar["pane_id"], "--source", "visible",
-                           "--ansi", "--raw").stdout
-                if re.search(r"38[;:]2[;:]", ansi):
-                    break
-                time.sleep(0.1)
-            assert re.search(r"38[;:]2[;:]", ansi), repr(ansi)
+            ansi = wait_for(
+                "OSC theme replies",
+                lambda: run("pane", "read", sidebar["pane_id"], "--source", "visible",
+                            "--ansi", "--raw").stdout,
+                lambda text: re.search(r"38[;:]2[;:]", text))
             assert "48;2;12;17;24" not in ansi, "Classic background leaked into auto theme"
 
-            # A new graph beside an already split source must resize only its
-            # own divider, leaving the first graph's width and source focus intact.
-            nested = invoke("sidebar")
-            layout = data("pane", "layout", "--pane", nested["pane_id"])["layout"]
-            widths = {p["pane_id"]: p["rect"]["width"] for p in layout["panes"]}
-            assert widths[sidebar["pane_id"]] == 40, layout
-            assert widths[nested["pane_id"]] == 40, layout
-            assert layout["focused_pane_id"] == source, layout
+            # Repeated actions reuse the live pane instead of making nested
+            # graph splits, including when the sidebar itself has focus.
+            repeated = invoke("sidebar")
+            assert repeated["pane_id"] == sidebar["pane_id"], repeated
+            assert repeated["terminal_id"] == sidebar["terminal_id"], repeated
+            shared_at(sidebar, workspace, source_tab, source, {source}, 40)
+            run("pane", "focus", "--pane", source, "--direction", "right")
+            repeated = invoke("sidebar")
+            assert repeated["pane_id"] == sidebar["pane_id"], repeated
+            assert repeated["terminal_id"] == sidebar["terminal_id"], repeated
+            assert layout(source)["focused_pane_id"] == sidebar["pane_id"]
+            assert len(panes(workspace)) == 2, panes(workspace)
 
+            # Move well beyond the initial viewport and retain both the footer
+            # selection index and visible history subjects across tab moves.
+            run("pane", "send-keys", sidebar["pane_id"], "G")
+            wait_for("selection at end of history", lambda: read_graph(sidebar["pane_id"]),
+                     lambda text: graph_state(text) is not None
+                                  and graph_state(text)[0] == ("38", "38"))
+            run("pane", "send-keys", sidebar["pane_id"], "k", "k", "k")
+            selected_screen = wait_for(
+                "scrolled graph selection", lambda: read_graph(sidebar["pane_id"]),
+                lambda text: graph_state(text) is not None
+                             and graph_state(text)[0] == ("35", "38"))
+            selected_state = graph_state(selected_screen)
+            assert "Uncommitted changes" not in selected_screen, selected_screen
+            run("pane", "focus", "--pane", sidebar["pane_id"], "--direction", "left")
+
+            # Remember the user's actual width, allowing one column of rounding
+            # when rebuilt in an equally sized destination tab.
+            run("pane", "resize", "--pane", sidebar["pane_id"], "--direction", "left",
+                "--amount", "0.05")
+            remembered_width = width(layout(sidebar["pane_id"]), sidebar["pane_id"])
+            assert remembered_width > 40, remembered_width
+            selected_state = graph_state(wait_for(
+                "graph redraw after manual resize", lambda: read_graph(sidebar["pane_id"]),
+                lambda text: graph_state(text) == selected_state))
+            tab2, source2 = create_tab(workspace, "Second tab", repo)
+            # Auto-sync must not require a repository in the newly focused tab.
+            tab3, source3 = create_tab(workspace, "Non-Git tab", base)
+            ordinary = {source, source2, source3}
+
+            def check_shared(tab, target):
+                shared_at(sidebar, workspace, tab, target, ordinary, remembered_width)
+                wait_for("preserved selection and scroll", lambda: read_graph(sidebar["pane_id"]),
+                         lambda text: graph_state(text) == selected_state)
+
+            focus_tabs(tab2)
+            check_shared(tab2, source2)
+            assert len(layout(source)["panes"]) == 1, layout(source)
+            repeated = invoke("sidebar")
+            assert repeated["pane_id"] == sidebar["pane_id"], repeated
+            assert repeated["terminal_id"] == sidebar["terminal_id"], repeated
+            check_shared(tab2, source2)
+            focus_tabs(source_tab)
+            check_shared(source_tab, source)
+            assert len(layout(source2)["panes"]) == 1, layout(source2)
+            focus_tabs(tab3)
+            check_shared(tab3, source3)
+            # Explicit reuse, not just the event hook, must also bypass Git
+            # discovery in a non-repository destination shell.
+            repeated = invoke("sidebar")
+            assert repeated["pane_id"] == sidebar["pane_id"], repeated
+            assert repeated["terminal_id"] == sidebar["terminal_id"], repeated
+            check_shared(tab3, source3)
+            focus_tabs(source_tab, tab2, tab3, tab2, source_tab, tab3, source_tab)
+            check_shared(source_tab, source)
+            assert len(layout(source2)["panes"]) == 1, layout(source2)
+            assert len(layout(source3)["panes"]) == 1, layout(source3)
+
+            # Sharing is workspace-local: another workspace starts without any
+            # sidebar, gets its own graph on demand, and moves only that graph.
+            other = data("workspace", "create", "--cwd", str(repo),
+                         "--label", "Independent workspace", "--focus")
+            other_workspace = other["workspace"]["workspace_id"]
+            other_source = other["root_pane"]["pane_id"]
+            other_tab = other["tab"]["tab_id"]
+            assert {pane["pane_id"] for pane in panes(other_workspace)} == {other_source}
+            other_sidebar = invoke("sidebar")
+            assert other_sidebar["pane_id"] != sidebar["pane_id"], other_sidebar
+            assert other_sidebar["terminal_id"] != sidebar["terminal_id"], other_sidebar
+            shared_at(other_sidebar, other_workspace, other_tab, other_source, {other_source}, 40)
+            other_tab2, other_source2 = create_tab(other_workspace, "Other second tab", repo)
+            focus_tabs(other_tab2)
+            shared_at(other_sidebar, other_workspace, other_tab2, other_source2,
+                      {other_source, other_source2}, 40)
+            focus_tabs(tab2)
+            check_shared(tab2, source2)
+            assert data("pane", "get", other_sidebar["pane_id"])["pane"]["tab_id"] == other_tab2
+            assert {pane["pane_id"] for pane in panes(other_workspace)} == {
+                other_source, other_source2, other_sidebar["pane_id"]}
+
+            # Full view still creates and focuses a distinct graph tab. The
+            # workspace's existing sidebar follows without taking its focus.
+            previous = {item["log_id"] for item in logs()}
             full = invoke("open")
             assert full["workspace_id"] == workspace, full
-            assert full["tab_id"] != source_tab, full
+            assert full["tab_id"] not in {source_tab, tab2, tab3}, full
+            assert full["pane_id"] != sidebar["pane_id"], full
+            assert full["terminal_id"] != sidebar["terminal_id"], full
             assert full["focused"], full
-            print("PASS: actual Herdr sidebar action, 40-column/nested splits, preserved focus, visible hints, OSC theme replies, graph output, full-view action")
+            ordinary.add(full["pane_id"])
+            hooks_since(previous)
+            shared_at(sidebar, workspace, full["tab_id"], full["pane_id"],
+                      ordinary, remembered_width)
+            wait_for("full-view graph", lambda: read_graph(full["pane_id"]),
+                     lambda text: "HERDR" in text and "HISTORY" in text
+                                  and ("WORKING TREE" in text or "COMMIT INSPECTOR" in text))
+            focus_tabs(source_tab)
+            check_shared(source_tab, source)
+
+            # q and manual pane close both opt out. Subsequent completed focus
+            # hooks must not resurrect the graph; only an explicit action can.
+            run("pane", "focus", "--pane", source, "--direction", "right")
+            run("pane", "send-keys", sidebar["pane_id"], "q")
+            wait_for("q to close shared sidebar", lambda: panes(workspace),
+                     lambda members: all(pane["terminal_id"] != sidebar["terminal_id"]
+                                         for pane in members))
+            focus_tabs(tab2, tab3, source_tab)
+            assert {pane["pane_id"] for pane in panes(workspace)} == ordinary
+            reopened = invoke("sidebar")
+            assert reopened["terminal_id"] != sidebar["terminal_id"], reopened
+            shared_at(reopened, workspace, source_tab, source, ordinary, 40)
+            focus_tabs(tab2)
+            shared_at(reopened, workspace, tab2, source2, ordinary, 40)
+            run("pane", "close", reopened["pane_id"])
+            focus_tabs(tab3, source_tab, tab2)
+            assert {pane["pane_id"] for pane in panes(workspace)} == ordinary
+            reopened_again = invoke("sidebar")
+            assert reopened_again["terminal_id"] != reopened["terminal_id"], reopened_again
+            shared_at(reopened_again, workspace, tab2, source2, ordinary, 40)
+
+            # Herdr refuses to move from a zoomed source tab. The hook must
+            # report failure (not successful sharing), leave user zoom alone,
+            # and retain the original pane/process for explicit recovery.
+            run("pane", "zoom", "--pane", source2, "--on")
+            assert layout(source2)["zoomed"], layout(source2)
+            focus_tabs(tab3, expected_status="failed")
+            stranded = data("pane", "get", reopened_again["pane_id"])["pane"]
+            assert stranded["tab_id"] == tab2, stranded
+            assert stranded["terminal_id"] == reopened_again["terminal_id"], stranded
+            assert layout(source2)["zoomed"], layout(source2)
+            assert layout(source3)["focused_pane_id"] == source3, layout(source3)
+            assert {pane["pane_id"] for pane in panes(workspace)} == \
+                ordinary | {reopened_again["pane_id"]}
+            # Address the known source explicitly: --current would unzoom the
+            # wrong tab. Herdr focuses this source as part of its zoom command.
+            run("pane", "zoom", "--pane", source2, "--off")
+            assert not layout(source2)["zoomed"], layout(source2)
+            assert data("workspace", "get", workspace)["workspace"]["active_tab_id"] == tab2
+            focus_tabs(tab3)
+            shared_at(reopened_again, workspace, tab3, source3, ordinary, 40)
+            repeated = invoke("sidebar")
+            assert repeated["pane_id"] == reopened_again["pane_id"], repeated
+            assert repeated["terminal_id"] == reopened_again["terminal_id"], repeated
+            shared_at(reopened_again, workspace, tab3, source3, ordinary, 40)
+            assert data("pane", "get", other_sidebar["pane_id"])["pane"]["terminal_id"] == \
+                other_sidebar["terminal_id"]
+            print("PASS: isolated Herdr shared sidebar; repeated/non-Git actions; tab moves/back/rapid focus; "
+                  "stable pane/terminal, selection/scroll, manual width and source focus; "
+                  "independent workspace; q/manual close opt-out; full-view action; "
+                  "zoom failure/recovery; OSC theme")
         finally:
             # All commands use the test session and isolated XDG paths.
             run("server", "stop", check=False)

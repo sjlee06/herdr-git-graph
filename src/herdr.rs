@@ -1,3 +1,7 @@
+mod sidebar;
+
+pub use sidebar::{open_sidebar, sync_sidebar};
+
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::{
@@ -63,14 +67,11 @@ pub fn context_paths(context: &Value) -> Vec<PathBuf> {
 }
 
 pub fn open_pane(root: &Path, theme: crate::theme::ThemeMode) -> Result<()> {
-    open_view(root, false, theme)
+    std::io::stdout().write_all(&open_view(root, false, theme)?)?;
+    Ok(())
 }
 
-pub fn open_sidebar(root: &Path, theme: crate::theme::ThemeMode) -> Result<()> {
-    open_view(root, true, theme)
-}
-
-fn open_view(root: &Path, sidebar: bool, theme: crate::theme::ThemeMode) -> Result<()> {
+fn open_view(root: &Path, sidebar: bool, theme: crate::theme::ThemeMode) -> Result<Vec<u8>> {
     use clap::ValueEnum;
     let context = plugin_context();
     let bin = env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
@@ -134,9 +135,7 @@ fn open_view(root: &Path, sidebar: bool, theme: crate::theme::ThemeMode) -> Resu
             eprintln!("사이드바는 열렸지만 초기 너비를 맞추지 못했습니다: {error}");
         }
     }
-    // Keep the original pane-open response as the action's sole JSON output.
-    std::io::stdout().write_all(&output.stdout)?;
-    Ok(())
+    Ok(output.stdout)
 }
 
 // Allow room for Herdr borders/scrollbar, graph lanes, and the full

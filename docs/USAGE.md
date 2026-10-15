@@ -15,10 +15,10 @@ The full view's minimum pane size is 64 columns × 18 rows. Around 120 columns o
 ## Graph-only sidebar
 
 ```bash
-# Open beside the current Herdr pane, keeping the current focus
+# Open or reuse the workspace's shared sidebar, keeping the current focus
 herdr plugin action invoke herdr.git-graph.sidebar
 
-# Open the registered sidebar explicitly
+# Open a separate, unshared sidebar pane explicitly
 herdr plugin pane open --plugin herdr.git-graph --entrypoint sidebar \
   --placement split --direction right --target-pane "$HERDR_PANE_ID" \
   --cwd /path/to/repository --no-focus
@@ -30,7 +30,15 @@ herdr plugin pane open --plugin herdr.git-graph --entrypoint sidebar \
 
 The sidebar displays only the history graph and commit list, with repository and HEAD context above it. Commit subjects occupy the first line; hashes and ref labels occupy the second. The branch list, author/date columns, and diff inspector are hidden. Commit diffs are not loaded in this mode.
 
-The sidebar action initially sizes the new split to 40 columns so the full `Uncommitted changes` subject fits alongside the graph, including room for Herdr borders and its scrollbar. A small source pane keeps at least half its width; Herdr’s 10–90% split-ratio limits also apply. This is a one-time adjustment, so subsequent manual resizing is preserved. Direct `plugin pane open` and standalone `--sidebar` use the size supplied by the host. The minimum content size is 24 columns × 8 rows. Adjust the split width by dragging the divider or using Herdr's resize mode (`prefix+r` by default). Focus it with `prefix+l` from the pane on its left. Search, `n`/`N`, navigation, graph panning, mouse selection/scrolling, `r`, help, and quit work as usual. `Tab`, `Shift-Tab`, `Enter` outside search, and `d` keep the graph-only layout. Close the sidebar with `q` while it is focused. Each open action creates a new split.
+The `herdr.git-graph.sidebar` action keeps one shared sidebar per Herdr server socket and workspace. Repeating the action reuses that pane rather than creating another split. If it is on another tab, the action moves it to the invocation's source tab. Other workspaces have their own sidebar. Direct `plugin pane open` and standalone `--sidebar` launches are not registered for sharing and remain independent.
+
+Once opened by the action, the sidebar follows tab switches: a `tab.focused` hook runs the hidden `--sync-sidebar` command to move the existing pane to the active tab with `--no-focus`. The same process keeps the selected commit, scroll position, search, and theme. This is plugin-managed movement, not native Herdr pinned-pane support, so a brief layout change is possible during a switch.
+
+Herdr refuses cross-tab moves when either the source or destination tab is zoomed. The plugin reports the move error without automatically unzooming or taking focus. Unzoom the source and destination tabs as needed, then switch to the desired tab again or invoke the sidebar action. The existing process and view state are retained.
+
+The first open requests a 40-column outer width so the full `Uncommitted changes` subject fits alongside the graph, including room for Herdr borders and its scrollbar. A small source pane keeps at least half its width, subject to Herdr's 10–90% split-ratio limits. After manual resizing, moves preserve the pane's current actual outer width, subject to a cap of half the target pane's width and the same split-ratio limits. Direct `plugin pane open` and standalone `--sidebar` use the size supplied by the host. The minimum content size is 24 columns × 8 rows. Adjust the split width by dragging the divider or using Herdr's resize mode (`prefix+r` by default).
+
+Focus the sidebar with `prefix+l` from the pane on its left. Search, `n`/`N`, navigation, graph panning, mouse selection/scrolling, `r`, help, and quit work as usual. `Tab`, `Shift-Tab`, `Enter` outside search, and `d` keep the graph-only layout. Close it with `q` while it is focused (`q` closes Help first), close its pane, or close its containing tab to end sharing. Tab-focus hooks do not reopen a closed sidebar; the next explicit sidebar action creates it again.
 
 The action takes its target from the invocation's focused pane. When opening the pane explicitly, run the command above inside Herdr, or pass a known pane ID with `--target-pane`. Split panes must not use `--workspace`.
 
@@ -81,7 +89,7 @@ Footer hints keep complete key/action pairs at every supported width, always sho
 
 ## Terminal theme
 
-The default `--theme auto` reads the current terminal foreground, background, and the six ANSI colors used for graph lanes and diffs, using OSC 10/11/4 queries. Herdr 0.9.0 answers these queries from its pane terminal, including the host terminal colors it has received. Text and curves use the same returned RGB values. This also works outside Herdr when the terminal supports color queries.
+The default `--theme auto` reads the current terminal foreground, background, and the six ANSI colors used for graph lanes and diffs, using OSC 10/11/4 queries. Herdr has answered these queries from its pane terminal since 0.9.0, including the host terminal colors it has received. Text and curves use the same returned RGB values. This also works outside Herdr when the terminal supports color queries.
 
 The normal background and foreground remain terminal defaults, so the pane background and terminal transparency are preserved. Curve PNGs have a transparent background. Muted text and selection backgrounds are derived from the returned foreground/background, for both light and dark themes. Selection background is an application-derived tint, not the terminal's native text-selection color. Press `r` outside search/help, or reopen the graph, after changing themes to query the colors again.
 
@@ -182,4 +190,4 @@ Use `--demo` instead of `--repo /path/to/repository` to try sample history. Stan
 | Curves are unavailable | Run inside Herdr, check the outer terminal and graphics setting, or use `--renderer text`. |
 | A pane is too small | Resize it; the full view needs 64 × 18, and `--sidebar` needs 24 × 8. |
 
-For local plugin development, rebuild before linking. GitHub installs run the manifest build command; `herdr plugin link` does not.
+For local plugin development, rebuild before linking. GitHub installs run the manifest build command; `herdr plugin link` does not. After rebuilding, close the shared sidebar and invoke its action again to run the new binary; repeating the action or pressing `r` does not replace the running process. Relink with `herdr plugin link .` after manifest changes so Herdr refreshes its action and hook registrations. See the [local build guide](DEVELOPMENT.md#build-and-link-locally).

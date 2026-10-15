@@ -6,7 +6,7 @@ The viewer is built with Rust and Ratatui.
 
 ## Build and link locally
 
-Source builds require Rust stable with Cargo on `PATH`, Git, and a macOS or Linux environment. Install Rust with [rustup](https://rustup.rs/) if needed. End-user installation uses `scripts/install.sh` and requires no Rust toolchain.
+Source builds require Rust stable with Cargo on `PATH`, Git, and a macOS or Linux environment. Install Rust with [rustup](https://rustup.rs/) if needed. End-user installation uses `scripts/install.sh` and requires no Rust toolchain. Herdr integration requires 0.9.5+, the tested baseline for the shared sidebar's tab-focus hook and pane-movement APIs.
 
 ```bash
 git clone https://github.com/sjlee06/herdr-git-graph.git
@@ -17,7 +17,7 @@ herdr plugin link .
 
 The build script runs `cargo build --release --locked` and copies the executable to `bin/herdr-git-graph`, the path declared by the plugin manifest. `CARGO_TARGET_DIR` is supported. Generated binaries and build output are ignored by Git.
 
-After changing Rust code, rebuild and reopen the viewer. If you change the manifest, relink the plugin so Herdr reads it again.
+After changing Rust code, rebuild and reopen the viewer. Close the shared sidebar before invoking its action again: repeating the action reuses the running process, so it does not load the rebuilt binary. If you change the manifest, run `herdr plugin link .` again so Herdr refreshes its action and hook registrations.
 
 For faster local builds with debug symbols, use `sh scripts/build.sh --debug`. This builds `target/debug/herdr-git-graph` and atomically replaces `bin/herdr-git-graph`, so an already-open viewer can keep running until you close it. Running panes continue using the old executable until reopened. The default build remains `--release`.
 
@@ -57,7 +57,7 @@ herdr plugin action invoke herdr.git-graph.sidebar
 herdr plugin log list --plugin herdr.git-graph
 ```
 
-코드를 수정할 때마다 `sh scripts/build.sh --debug`로 다시 빌드하고, 그래프에서 `q`로 닫은 뒤 다시 여세요. `r`은 Git 데이터와 터미널 색상을 다시 조회하며 실행 파일을 교체하지는 않습니다. manifest를 수정했을 때는 `herdr plugin link .`도 다시 실행합니다.
+코드를 수정할 때마다 `sh scripts/build.sh --debug`로 다시 빌드하고, 그래프에서 `q`로 닫은 뒤 다시 여세요. 공유 사이드바는 액션을 반복해도 실행 중인 프로세스를 재사용하므로 반드시 닫았다가 열어야 새 실행 파일이 적용됩니다. `r`은 Git 데이터와 터미널 색상을 다시 조회하며 실행 파일을 교체하지는 않습니다. manifest를 수정했을 때는 `herdr plugin link .`도 다시 실행해 액션과 hook 등록을 갱신합니다.
 
 배포된 릴리스로 돌아가려면 열린 그래프를 `q`로 닫고, 로컬 링크를 먼저 해제한 뒤 설치하세요. 링크된 상태에서 GitHub 설치를 실행하면 `already linked from a local path` 오류가 발생합니다.
 
@@ -68,9 +68,13 @@ herdr plugin install sjlee06/herdr-git-graph
 
 터미널을 밝은 테마와 어두운 테마로 각각 바꾸고 그래프에서 `r`을 누르세요. 일반 행 배경이 옆 패널과 이어지는지, 선택 행이 보이는지, 곡선 배경에 검은 사각형이 없는지 확인합니다. `/` 검색·한글 입력·방향키·마우스·창 크기 변경·`q` 종료도 확인하세요. `--theme terminal`은 색상 조회 없는 대체 경로를 확인하는 옵션이며 문자 그래프를 사용합니다.
 
+공유 사이드바는 액션을 반복해도 패널이 늘어나지 않는지, 다른 탭에서 실행하면 그 탭으로 이동하는지 확인하세요. 탭 전환 시 포커스, 선택한 커밋, 스크롤, 검색, 테마와 수동 조절한 너비가 유지되는지도 확인합니다. 좁은 대상 패널에서는 너비 제한이 적용됩니다. 다른 작업 공간에는 별도의 사이드바가 열려야 하며, 사이드바 패널이나 해당 탭을 닫은 뒤에는 탭을 전환해도 다시 열리지 않아야 합니다. 새 사이드바는 액션을 다시 실행해 여세요.
+
 개인 Herdr 세션에 플러그인을 연결하지 않고 실제 실행 경로만 검증하려면 빌드 후 `python3 tests/herdr_live.py`를 실행하세요. 테스트가 별도 세션과 임시 설정을 만들고 정리합니다. 실제 바깥 터미널에서 보이는 색상·투명도·곡선의 육안 확인은 위 수동 확인이 필요합니다.
 
 ## Checks
+
+The launcher regression tests use `python3` to simulate Herdr; Python is not required to run the plugin.
 
 ```bash
 python3 tests/install.py
@@ -80,7 +84,7 @@ cargo test --locked
 sh scripts/build.sh
 ```
 
-When Herdr is installed, also run `python3 tests/herdr_live.py` after building. It starts a separate headless test session with isolated XDG directories, invokes the real sidebar and full-view actions, checks the resulting panes and graph output, and stops only its own test server. Run this when changing plugin launch arguments; a mock CLI does not enforce Herdr's placement rules.
+When Herdr 0.9.5+ is installed, also run `python3 tests/herdr_live.py` after building. It starts a separate headless test session with isolated XDG directories and stops only its own test server. It checks sidebar reuse, cross-tab following and rapid switching, stable pane/terminal identity, selection/scroll and width preservation, focus, workspace isolation, close/opt-out behavior, graph output, and the full-view action. Run it when changing plugin launch or synchronization behavior; a mock CLI does not enforce Herdr's placement rules.
 
 The [CI workflow](../.github/workflows/ci.yml) runs on macOS and Linux. Tests cover graph topology, real temporary Git repositories, branch filters, empty commits, detached HEAD, linked worktrees, shallow clones, Unicode search, and external-diff suppression. Working tree tests include partial staging, untracked/ignored files, renames, deletions, conflicts, unborn HEAD, bounded patches, and index preservation. Refresh tests check unchanged-status edits, selection/scroll preservation, stale responses, single pending polls, and backoff.
 
@@ -124,10 +128,13 @@ This standalone export has a 40-column content area; the full-terminal image use
 | `src/graphics.rs` | tiny-skia curves and direct Kitty graphics PNG output |
 | `src/theme.rs` | Native/classic styles, OSC color parsing, shared RGB palette |
 | `src/theme_probe.rs` | Asynchronous terminal queries and color-reply filtering |
-| `src/herdr.rs` | Repository context and plugin action helpers |
+| `src/herdr.rs` | Repository context, plugin pane launch, and sidebar sizing |
+| `src/herdr/sidebar.rs` | Workspace-shared sidebar registry, file locking, reuse, and tab-focus synchronization |
 | `tests/repository.rs` | Integration tests using temporary Git repositories |
-| `tests/herdr.rs` | Tab/sidebar launch arguments, repository context, CLI errors |
+| `tests/herdr.rs` | Launcher arguments, shared-sidebar reuse/movement, workspace/session isolation, concurrent opens, stale records, and CLI errors |
 | `tests/herdr_live.py` | Optional real Herdr action and pane integration in an isolated session |
+
+The shared-sidebar registry uses hashed `.json` and `.lock` filenames under `$HERDR_PLUGIN_STATE_DIR/shared-sidebars/`, keyed by Herdr server socket and workspace. When that variable is unset, it falls back to `$XDG_STATE_HOME/herdr-git-graph/shared-sidebars/` or `$HOME/.local/state/herdr-git-graph/shared-sidebars/`. A file lock serializes sidebar actions and synchronization hooks. Recorded pane and terminal IDs are checked against live panes before reuse. Synchronization clears stale records without reopening the sidebar; a later explicit action creates a new one. Only the sidebar action registers panes for sharing, not direct pane opens or standalone `--sidebar` runs.
 
 Graph layout is separate from rendering. Keep parent relationships intact across branch filtering and commit limits, and retain terminal cleanup and text fallback when changing rendering code.
 

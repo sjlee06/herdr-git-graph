@@ -63,6 +63,9 @@ struct Args {
     /// Open a graph-only sidebar to the right of the current Herdr pane
     #[arg(long, conflicts_with_all = ["open_pane", "sidebar", "demo", "snapshot", "graph_png", "check"])]
     open_sidebar: bool,
+    /// Follow the active workspace tab (internal plugin event hook)
+    #[arg(long, hide = true, conflicts_with_all = ["open_pane", "open_sidebar", "sidebar", "demo", "snapshot", "graph_png", "check"])]
+    sync_sidebar: bool,
     /// Show only the graph and commit list, suitable for narrow side panes
     #[arg(long, conflicts_with = "open_pane")]
     sidebar: bool,
@@ -85,6 +88,12 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if args.sync_sidebar {
+        return herdr::sync_sidebar();
+    }
+    if args.open_sidebar {
+        return herdr::open_sidebar(args.repo.as_deref(), args.theme);
+    }
     let root = if args.demo {
         PathBuf::from("herdr-git-graph")
     } else {
@@ -92,9 +101,6 @@ fn main() -> Result<()> {
     };
     if args.open_pane {
         return herdr::open_pane(&root, args.theme);
-    }
-    if args.open_sidebar {
-        return herdr::open_sidebar(&root, args.theme);
     }
     let repo = if args.demo {
         git::demo()

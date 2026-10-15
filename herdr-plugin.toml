@@ -1,7 +1,7 @@
 id = "herdr.git-graph"
 name = "Herdr Git Graph"
 version = "0.4.4"
-min_herdr_version = "0.9.0"
+min_herdr_version = "0.9.5"
 description = "Interactive Git commit and branch graph with smooth curves, search, and diffs."
 platforms = ["macos", "linux"]
 
@@ -19,6 +19,10 @@ id = "sidebar"
 title = "Open Git Graph Sidebar"
 contexts = ["workspace"]
 command = ["./bin/herdr-git-graph", "--open-sidebar"]
+
+[[events]]
+on = "tab.focused"
+command = ["./bin/herdr-git-graph", "--sync-sidebar"]
 
 [[panes]]
 id = "graph"
