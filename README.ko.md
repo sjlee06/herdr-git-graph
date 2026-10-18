@@ -10,20 +10,31 @@
 
 Herdr용 조회 전용 Git 그래프 플러그인입니다. 사이드바에서 이력을 살펴보고, 전체 화면에서 변경 내용을 확인할 수 있습니다.
 
-<p align="center">
-  <img src="docs/preview-sidebar.png" width="1600" alt="Herdr 코드 편집기 옆에서 데모 이력을 표시하는 Git Graph 사이드바">
-</p>
+<table>
+  <tr>
+    <th width="50%">어두운 테마 · Classic</th>
+    <th width="50%">밝은 테마 · Tomorrow</th>
+  </tr>
+  <tr>
+    <td><a href="docs/preview-sidebar-dark.png"><img src="docs/preview-sidebar-dark.png" width="360" alt="커밋 제목 위에 브랜치·태그 배지를 표시하는 어두운 사이드바"></a></td>
+    <td><a href="docs/preview-sidebar-light.png"><img src="docs/preview-sidebar-light.png" width="360" alt="동일한 데모 이력을 표시하는 Tomorrow 밝은 사이드바"></a></td>
+  </tr>
+</table>
 
-*코드 옆에서 Git 이력을 확인하는 사이드바 데모입니다.*
+*같은 사이드바 데모를 어두운 테마와 밝은 테마로 비교했습니다. 이미지를 누르면 크게 볼 수 있습니다.*
+
+[Herdr 편집기 옆에 배치한 사이드바](docs/preview-sidebar.png)도 확인할 수 있습니다(데모 합성 이미지). 기본 `--theme auto`는 사용 중인 터미널 색상을 따릅니다.
 
 ## 주요 기능
 
 - **작업 공간 공유 사이드바:** 포커스를 가져오지 않고 활성 탭을 따라 이동하며 현재 조회 상태 유지.
-- **브랜치·병합 그래프:** 분기별 색상과 브랜치·태그 표시.
+- **브랜치·병합 그래프:** 분기별 색상과 현재 브랜치·로컬 브랜치·원격 브랜치·태그를 구분하는 배지.
 - **Diff 보기:** 전체 화면에서 커밋과 스테이징·미스테이징 변경 내용 확인.
 - **검색:** 메시지·작성자·ref·해시로 커밋 검색.
 - **자동 갱신:** 기본 2초 간격으로 로컬 변경 반영.
 - **터미널 연동:** 터미널 테마를 자동 적용하고, Herdr 0.9.2+ 호환 패널에서는 표준 Kitty graphics protocol로 곡선을, 그 외에는 문자 그래프를 표시.
+
+커밋 목록에서는 제목 위에 브랜치·태그 배지를 표시합니다. 현재 브랜치는 `●`, 원격 브랜치는 보라색 계열 배지로 구분하며, 공간이 부족하면 나머지 배지 수를 `+N`으로 표시합니다. 커밋 해시는 목록에서 숨기고 전체 화면의 상세 패널에서 전체 ref 이름과 함께 보여줍니다. 해시 검색은 그대로 사용할 수 있습니다.
 
 ## 그래픽 렌더러
 
@@ -53,7 +64,16 @@ herdr plugin action invoke herdr.git-graph.sidebar
 
 ### 전체 화면
 
-![브랜치 필터, 곡선 커밋 이력, 컬러 diff 상세 패널을 표시한 전체 데모 화면](docs/preview.png)
+<table>
+  <tr>
+    <th width="50%">어두운 테마 · Classic</th>
+    <th width="50%">밝은 테마 · Tomorrow</th>
+  </tr>
+  <tr>
+    <td><a href="docs/preview.png"><img src="docs/preview.png" width="630" alt="브랜치·태그 배지와 diff 상세 패널을 표시하는 어두운 전체 화면"></a></td>
+    <td><a href="docs/preview-light.png"><img src="docs/preview-light.png" width="630" alt="동일한 커밋 이력과 diff를 표시하는 Tomorrow 밝은 전체 화면"></a></td>
+  </tr>
+</table>
 
 *브랜치를 필터링하고 커밋 diff를 확인하는 전체 화면 데모입니다.*
 
@@ -71,17 +91,17 @@ herdr plugin action invoke herdr.git-graph.open
 [[keys.command]]
 key = "prefix+u"
 type = "plugin_action"
-command = "herdr.git-graph.open"
-description = "Open Git Graph"
+command = "herdr.git-graph.toggle-sidebar"
+description = "Toggle Git Graph Sidebar"
 
 [[keys.command]]
 key = "prefix+shift+u"
 type = "plugin_action"
-command = "herdr.git-graph.toggle-sidebar"
-description = "Toggle Git Graph Sidebar"
+command = "herdr.git-graph.open"
+description = "Open Git Graph in New Tab"
 ```
 
-`herdr config check`로 충돌을 확인하고 `herdr server reload-config`를 실행하세요. 설정한 prefix 다음 `u`는 전체 그래프를 엽니다. `Shift+u`는 사이드바가 없으면 열고, 이미 열려 있으면 닫습니다. 이렇게 닫으면 마지막으로 조절한 너비를 기억하고, 다시 열기 전까지 탭을 전환해도 사이드바가 따라오지 않습니다. 다시 열 때는 공간이 허용하는 범위에서 저장된 너비를 복원합니다. 기존 `herdr.git-graph.sidebar` 액션은 열린 사이드바를 재사용하는 열기 전용 액션으로 유지됩니다.
+`herdr config check`로 충돌을 확인하고 `herdr server reload-config`를 실행하세요. 설정한 prefix 다음 `Shift+u`는 새 탭에 전체 그래프를 엽니다. `u`는 사이드바가 없으면 열고, 이미 열려 있으면 닫습니다. 이렇게 닫으면 마지막으로 조절한 너비를 기억하고, 다시 열기 전까지 탭을 전환해도 사이드바가 따라오지 않습니다. 다시 열 때는 공간이 허용하는 범위에서 저장된 너비를 복원합니다. 기존 `herdr.git-graph.sidebar` 액션은 열린 사이드바를 재사용하는 열기 전용 액션으로 유지됩니다.
 
 ## 사용법
 

@@ -10,20 +10,31 @@ English · [한국어](README.ko.md)
 
 A read-only Git graph plugin for Herdr, with a sidebar for browsing history and a full view for inspecting changes.
 
-<p align="center">
-  <img src="docs/preview-sidebar.png" width="1600" alt="Git Graph sidebar beside the code editor in Herdr, showing demo history">
-</p>
+<table>
+  <tr>
+    <th width="50%">Dark · Classic</th>
+    <th width="50%">Light · Tomorrow</th>
+  </tr>
+  <tr>
+    <td><a href="docs/preview-sidebar-dark.png"><img src="docs/preview-sidebar-dark.png" width="360" alt="Dark sidebar with branch and tag badges above commit subjects"></a></td>
+    <td><a href="docs/preview-sidebar-light.png"><img src="docs/preview-sidebar-light.png" width="360" alt="Tomorrow light sidebar showing the same demo history"></a></td>
+  </tr>
+</table>
 
-*Browse Git history beside your code. Demo shown.*
+*The same sidebar demo in dark and light colors. Click an image to enlarge it.*
+
+[See the sidebar beside an editor in Herdr](docs/preview-sidebar.png) (demo composite). The default `--theme auto` follows your terminal's colors.
 
 ## Features
 
 - **Workspace-shared sidebar** — one sidebar follows the active tab without taking focus, keeping its view state.
-- **Branch and merge graph** — colored lanes with branch and tag labels.
+- **Branch and merge graph** — colored lanes with distinct current-branch, local-branch, remote-branch, and tag badges.
 - **Diffs** — inspect commits and staged or unstaged changes in the full view.
 - **Search** — find commits by message, author, ref, or hash.
 - **Live updates** — local changes appear automatically, checked every 2 seconds by default.
 - **Terminal integration** — follows your terminal theme, drawing smooth curves with the standard Kitty graphics protocol in Herdr 0.9.2+ panes and using a text graph otherwise.
+
+History puts branch and tag badges above commit subjects. The current branch is marked `●`, remote branches use purple-toned badges, and extra badges appear as `+N` when space is limited. Commit hashes are hidden from the history list; the full view's inspector shows hashes and complete ref labels. Hash search still works.
 
 ## Graphics renderer
 
@@ -53,7 +64,16 @@ Drag the divider or use `prefix+r` to resize the sidebar. Use `prefix+l` to focu
 
 ### Full view
 
-![Full demo view with branch filters, curved commit history, and a colored diff inspector](docs/preview.png)
+<table>
+  <tr>
+    <th width="50%">Dark · Classic</th>
+    <th width="50%">Light · Tomorrow</th>
+  </tr>
+  <tr>
+    <td><a href="docs/preview.png"><img src="docs/preview.png" width="630" alt="Dark full view with branch and tag badges and a diff inspector"></a></td>
+    <td><a href="docs/preview-light.png"><img src="docs/preview-light.png" width="630" alt="Tomorrow light full view with the same history and diff"></a></td>
+  </tr>
+</table>
 
 *Filter branches and inspect commit diffs. Demo shown.*
 
@@ -71,17 +91,17 @@ Add an available key to `~/.config/herdr/config.toml`:
 [[keys.command]]
 key = "prefix+u"
 type = "plugin_action"
-command = "herdr.git-graph.open"
-description = "Open Git Graph"
+command = "herdr.git-graph.toggle-sidebar"
+description = "Toggle Git Graph Sidebar"
 
 [[keys.command]]
 key = "prefix+shift+u"
 type = "plugin_action"
-command = "herdr.git-graph.toggle-sidebar"
-description = "Toggle Git Graph Sidebar"
+command = "herdr.git-graph.open"
+description = "Open Git Graph in New Tab"
 ```
 
-Run `herdr config check`, then `herdr server reload-config`. Press your prefix followed by `u` for the full view or `Shift+u` to toggle the sidebar: open it when closed, or close it when already open. Closing this way remembers the last chosen width and stops tab-following until the next open. Reopening restores that width where space allows. The `herdr.git-graph.sidebar` action remains open-only and reuses an existing sidebar.
+Run `herdr config check`, then `herdr server reload-config`. Press your prefix followed by `Shift+u` to open the full graph in a new tab, or `u` to toggle the sidebar: open it when closed, or close it when already open. Closing this way remembers the last chosen width and stops tab-following until the next open. Reopening restores that width where space allows. The `herdr.git-graph.sidebar` action remains open-only and reuses an existing sidebar.
 
 ## Use
 

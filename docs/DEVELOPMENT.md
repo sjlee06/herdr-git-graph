@@ -92,11 +92,22 @@ See [validation notes](VALIDATION.md) for recorded results and live terminal tes
 
 ## Preview assets
 
-The README leads with `docs/preview-sidebar.png`, a full Herdr terminal showing workspace navigation, source code, a test terminal, and the graph sidebar together. It is rendered from the actual ANSI output and Kitty graphics frames of an isolated Herdr demo session. The editor shows the unmodified `stroke` function in `src/graphics.rs`; the terminal shows a successful `cargo test --lib graph::tests` run. The graph uses built-in sample history with `--demo --sidebar --theme classic --renderer curves`.
+Both READMEs compare dark (Classic) and light (Tomorrow) demos side by side. The sidebar pair is `docs/preview-sidebar-dark.png` and `docs/preview-sidebar-light.png`, both 720 × 1040 pixels (40×26 cells). The full-view pair is `docs/preview.png` and `docs/preview-light.png`, both 2520 × 2240 pixels (140×56 cells). Each image links to its full-size PNG.
 
-The scene uses a 160-column × 42-row terminal, a 24-column Herdr workspace list, and a 40-column graph split including the host borders and scrollbar. The remaining 96 columns are split vertically between the editor and test terminal. `docs/preview-sidebar.svg` is 1600 × 840 pixels; its 2× PNG is 3200 × 1680 pixels and fills the available README width.
+The linked `docs/preview-sidebar.png` is a demo composite showing workspace navigation, source code, a test terminal, and the graph sidebar together. The workspace frame, editor, and test output are preserved from the original isolated Herdr session capture; they are not a new source or test capture. `scripts/preview.py` replaces only the graph pane's content with the current viewer's headless snapshot, including branch/tag badges, one-line subjects, and no history hashes. The graph uses built-in sample history with `--demo --sidebar --theme classic --renderer curves`.
 
-Generate the separate full-view and text-mode previews from the same built-in data using the Ratatui test backend and the app's curve renderer:
+The scene uses a 160-column × 42-row terminal, a 24-column Herdr workspace list, and a 40-column graph split including the host borders and scrollbar. The remaining 96 columns are split vertically between the editor and test terminal. `docs/preview-sidebar.svg` is 1600 × 840 pixels; its 2× PNG is 3200 × 1680 pixels.
+
+Rebuild the viewer, then refresh the four dark SVGs from the same built-in data using the Ratatui test backend and the app's curve renderer:
+
+```bash
+sh scripts/build.sh
+python3 scripts/preview.py
+```
+
+The script preserves the captured workspace frame in `docs/preview-sidebar.svg` and replaces its 38-column × 39-row graph content. It maps the snapshot's 9×20-pixel cells to the frame's 10×20-pixel cells. Keep that SVG as the input frame; rerunning the script replaces the graph rather than stacking another copy.
+
+To generate just the separate full-view and text-mode previews:
 
 ```bash
 ./bin/herdr-git-graph --demo --theme classic --renderer curves \
@@ -105,7 +116,23 @@ Generate the separate full-view and text-mode previews from the same built-in da
   --width 140 --height 56 --snapshot docs/preview-text.svg
 ```
 
-Rasterize `preview.svg` to `preview.png` at 2× scale with an SVG renderer supporting system fonts and embedded PNG images, such as [resvg](https://github.com/linebender/resvg). The full-view PNG is 2520 × 2240 pixels and includes the colored patch in the inspector.
+Rasterize the dark previews at 2× scale with an SVG renderer supporting system fonts, nested SVGs, and embedded PNG images, such as [resvg](https://github.com/linebender/resvg):
+
+```bash
+resvg --zoom 2 docs/preview.svg docs/preview.png
+resvg --zoom 2 docs/preview-sidebar.svg docs/preview-sidebar.png
+resvg --zoom 2 docs/preview-sidebar-dark.svg docs/preview-sidebar-dark.png
+```
+
+The full-view PNG is 2520 × 2240 pixels and includes the commit hash and colored patch in the inspector; hashes do not appear in History. The sidebar PNG is 3200 × 1680 pixels. Check both images for readable current/local/remote/tag badges, subject truncation, Korean text, and curve alignment after regenerating them.
+
+The light demos use the same renderer with Ghostty's bundled Tomorrow foreground (`#4d4d4c`), background (`#ffffff`), and ANSI palette, as if returned by terminal color queries. These are terminal colors, not Herdr's workspace UI theme. They are headless examples, not live terminal captures; no `--theme light` option or terminal configuration change is needed. The sidebar is a standalone 40×26-cell view rather than the full workspace composite.
+
+```bash
+cargo run --locked --example preview-light
+resvg --zoom 2 docs/preview-light.svg docs/preview-light.png
+resvg --zoom 2 docs/preview-sidebar-light.svg docs/preview-sidebar-light.png
+```
 
 For a standalone sidebar layout check, export to a temporary path so it does not replace the full-terminal README image:
 
@@ -125,6 +152,7 @@ This standalone export has a 40-column content area; the full-terminal image use
 | `src/git.rs` | Bounded Git subprocesses, log/ref parsing, diffs |
 | `src/graph.rs` | Lane assignment from parent commit IDs |
 | `src/ui.rs` | Ratatui panels, Unicode graph, SVG snapshots |
+| `src/ui/refs.rs` | Branch/tag badge classification, priority, styling, and overflow |
 | `src/graphics.rs` | tiny-skia curves and direct Kitty graphics PNG output |
 | `src/theme.rs` | Native/classic styles, OSC color parsing, shared RGB palette |
 | `src/theme_probe.rs` | Asynchronous terminal queries and color-reply filtering |

@@ -47,7 +47,7 @@ Closing the tab containing a shared sidebar does not end sharing if another tab 
 
 The action takes its target from the invocation's focused pane. When opening the pane explicitly, run the command above inside Herdr, or pass a known pane ID with `--target-pane`. Split panes must not use `--workspace`.
 
-Suggested bindings are `prefix+u` for `herdr.git-graph.open` and `prefix+shift+u` for `herdr.git-graph.toggle-sidebar`; see the [README config example](../README.md#add-a-keybinding). Avoid `prefix+g` (`goto`) and `prefix+shift+g` (new worktree), which Herdr already binds by default. Validate with `herdr config check` before reloading the configuration.
+Suggested bindings are `prefix+u` for `herdr.git-graph.toggle-sidebar` and `prefix+shift+u` for `herdr.git-graph.open`; see the [README config example](../README.md#add-a-keybinding). Avoid `prefix+g` (`goto`) and `prefix+shift+g` (new worktree), which Herdr already binds by default. Validate with `herdr config check` before reloading the configuration.
 
 ## Uncommitted changes and live updates
 
