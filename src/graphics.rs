@@ -169,8 +169,8 @@ const DEFAULT_CELL_SIZE: (u32, u32) = (10, 20);
 #[cfg(unix)]
 const KITTY_CHUNK_SIZE: usize = 4096;
 
-/// A lightweight Kitty graphics client. Herdr 0.9.2+ accepts these standard
-/// escape sequences on the pane PTY; it no longer exposes a graphics socket RPC.
+/// A lightweight Kitty graphics client. Herdr 0.9.0+ accepts these standard
+/// escape sequences on the pane PTY; no graphics socket RPC is needed.
 #[cfg(unix)]
 pub struct Surface {
     cell: (u32, u32),
