@@ -11,7 +11,9 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Clear, Paragraph, Wrap},
+    widgets::{
+        Block, BorderType, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+    },
 };
 use std::{fmt::Write, path::Path};
 
@@ -55,6 +57,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, smooth: bool) -> Option<Viewport> 
         area,
     );
     app.history_area = Rect::default();
+    app.history_rows.clear();
     app.branches_area = Rect::default();
     app.detail_area = Rect::default();
     let (min_width, min_height) = if app.sidebar { (24, 8) } else { (64, 18) };
@@ -165,13 +168,21 @@ fn sidebar(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
     );
     let view = history(frame, app, rows[1], smooth);
     let count = app.repo.commits.len();
+    let last_visible = app
+        .history_rows
+        .iter()
+        .flatten()
+        .last()
+        .map_or(app.top + 1, |index| index + 1)
+        .min(count);
     let status = if app.searching || !app.query.is_empty() {
         search_prompt(app, rows[2].width)
     } else {
         elide(
             &format!(
-                "{}/{}{} · {}",
-                if count == 0 { 0 } else { app.selected + 1 },
+                "{}–{}/{}{} · {}",
+                if count == 0 { 0 } else { app.top + 1 },
+                last_visible,
                 count,
                 if app.repo.commit_count() == app.limit {
                     " (limit)"
@@ -331,15 +342,28 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
     } else {
         Rect::new(inner.x, inner.y + 1, inner.width, inner.height - 1)
     };
-    // Keep each node's badge and subject visible together, including mouse targets.
     body.height -= body.height % 2;
     app.history_area = body;
+    app.history_rows = vec![None; usize::from(body.height)];
     let count = usize::from(body.height / 2).max(1);
-    if app.selected < app.top {
-        app.top = app.selected;
-    }
-    if app.selected >= app.top + count {
-        app.top = app.selected + 1 - count;
+    if app.sidebar {
+        app.scroll_history_to(app.history_scroll_position());
+        scrollbar(
+            frame,
+            theme,
+            area,
+            body,
+            app.history_total_rows(),
+            usize::from(body.height),
+            app.history_scroll_position(),
+        );
+    } else if let Some(selected) = app.selected {
+        if selected < app.top {
+            app.top = selected;
+        }
+        if selected >= app.top + count {
+            app.top = selected + 1 - count;
+        }
     }
     let graph_width = ((app.graph.width * 3 + 2).max(if app.sidebar { 5 } else { 10 }) as u16)
         .min(36)
@@ -385,78 +409,102 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
         );
         return None;
     }
-    for (i, commit) in app
-        .repo
-        .commits
-        .iter()
-        .enumerate()
-        .skip(app.top)
-        .take(count)
-    {
-        let y = body.y + ((i - app.top) * 2) as u16;
-        if y >= body.bottom() {
+    let mut y = i32::from(body.y)
+        - if app.sidebar {
+            app.top_offset as i32
+        } else {
+            0
+        };
+    for (i, commit) in app.repo.commits.iter().enumerate().skip(app.top) {
+        if y >= i32::from(body.bottom()) {
             break;
         }
-        let selected = app.selected == i;
+        let height = if app.sidebar {
+            app.history_row_height(i)
+        } else {
+            2
+        };
+        let selected = app.selected == Some(i);
         let bg = if selected {
             theme.selection()
         } else {
             theme.bg()
         };
-        frame.render_widget(
-            Block::default().style(Style::default().bg(bg)),
-            Rect::new(body.x, y, body.width, 2.min(body.bottom() - y)),
-        );
+        let badges = refs::badges(commit, &app.repo.branches);
+        let subject_y = y + i32::from(!badges.is_empty());
         let is_match = !app.query.is_empty()
             && [&commit.subject, &commit.author, &commit.refs, &commit.oid]
                 .iter()
                 .any(|s| s.to_lowercase().contains(&app.query.to_lowercase()));
-        let badges = refs::badges(commit, &app.repo.branches);
-        let subject_y = y + u16::from(!badges.is_empty());
-        if !badges.is_empty() {
-            frame.render_widget(
-                Paragraph::new(refs::line(&badges, cols[1].width, theme)),
-                Rect::new(cols[1].x, y, cols[1].width, 1),
-            );
-        }
-        if subject_y < body.bottom() {
-            frame.render_widget(
-                Paragraph::new(elide(&clean(&commit.subject), cols[1].width, false)).style(
-                    Style::default()
-                        .fg(if is_match {
-                            theme.highlight()
-                        } else {
-                            theme.fg()
-                        })
-                        .patch(if selected {
-                            theme.selected_text()
-                        } else {
-                            Style::default()
-                        }),
-                ),
-                Rect::new(cols[1].x, subject_y, cols[1].width, 1),
-            );
-        }
-        if commit.is_worktree() && y + 1 < body.bottom() {
-            frame.render_widget(
-                Paragraph::new(elide(&clean(&commit.refs), cols[1].width, false))
-                    .style(theme.muted()),
-                Rect::new(cols[1].x, y + 1, cols[1].width, 1),
-            );
-        }
-        if cols[2].width > 0 {
-            frame.render_widget(
-                Paragraph::new(clean(&commit.author)).style(if selected {
-                    Style::default().fg(theme.fg())
-                } else {
-                    theme.muted()
-                }),
-                Rect::new(cols[2].x, y, cols[2].width, 1),
-            );
-            if y + 1 < body.bottom() {
+        let first_line = (i32::from(body.y) - y).max(0) as usize;
+        let last_line = ((i32::from(body.bottom()) - y).max(0) as usize).min(height);
+        for line in first_line..last_line {
+            let screen_y = y + line as i32;
+            if screen_y < i32::from(body.y) || screen_y >= i32::from(body.bottom()) {
+                continue;
+            }
+            let screen_y = screen_y as u16;
+            if line < 2 {
+                app.history_rows[usize::from(screen_y - body.y)] = Some(i);
                 frame.render_widget(
-                    Paragraph::new(commit.date.clone()).style(theme.muted()),
-                    Rect::new(cols[2].x, y + 1, cols[2].width, 1),
+                    Block::default().style(Style::default().bg(bg)),
+                    Rect::new(body.x, screen_y, body.width, 1),
+                );
+                if line == 0 && !badges.is_empty() {
+                    frame.render_widget(
+                        Paragraph::new(refs::line(&badges, cols[1].width, theme)),
+                        Rect::new(cols[1].x, screen_y, cols[1].width, 1),
+                    );
+                }
+                if i32::from(screen_y) == subject_y {
+                    let subject = clean(&commit.subject);
+                    frame.render_widget(
+                        Paragraph::new(elide(&subject, cols[1].width, false)).style(
+                            Style::default()
+                                .fg(if is_match {
+                                    theme.highlight()
+                                } else {
+                                    theme.fg()
+                                })
+                                .patch(if selected {
+                                    theme.selected_text()
+                                } else {
+                                    Style::default()
+                                }),
+                        ),
+                        Rect::new(cols[1].x, screen_y, cols[1].width, 1),
+                    );
+                }
+                if line == 1 && commit.is_worktree() {
+                    frame.render_widget(
+                        Paragraph::new(elide(&clean(&commit.refs), cols[1].width, false))
+                            .style(theme.muted()),
+                        Rect::new(cols[1].x, screen_y, cols[1].width, 1),
+                    );
+                }
+                if cols[2].width > 0 {
+                    let text = if line == 0 {
+                        &commit.author
+                    } else {
+                        &commit.date
+                    };
+                    frame.render_widget(
+                        Paragraph::new(clean(text)).style(if line == 0 && selected {
+                            Style::default().fg(theme.fg())
+                        } else {
+                            theme.muted()
+                        }),
+                        Rect::new(cols[2].x, screen_y, cols[2].width, 1),
+                    );
+                }
+            } else {
+                frame.render_widget(
+                    Block::default().style(Style::default().bg(theme.panel())),
+                    Rect::new(cols[1].x, screen_y, cols[1].width, 1),
+                );
+                frame.render_widget(
+                    Paragraph::new(file_line(app, line - 2, cols[1].width)),
+                    Rect::new(cols[1].x, screen_y, cols[1].width, 1),
                 );
             }
         }
@@ -467,16 +515,53 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
                 &app.graph.rows[i],
                 cols[0],
                 y,
+                height,
                 app.graph_offset,
             );
         }
+        y += height as i32;
     }
     Some(Viewport {
         area: cols[0],
         top: app.top,
         selected: app.selected,
         column_offset: app.graph_offset,
+        top_offset: if app.sidebar { app.top_offset } else { 0 },
+        expanded: app
+            .sidebar
+            .then_some(app.selected)
+            .flatten()
+            .map(|index| (index, app.expanded_file_rows())),
     })
+}
+
+fn file_line(app: &App, index: usize, width: u16) -> Line<'static> {
+    let theme = app.theme;
+    let message = match &app.files {
+        None => "Loading files…",
+        Some(Err(_)) => "Cannot load files · r retry",
+        Some(Ok(files)) if files.is_empty() => "No changed files",
+        Some(Ok(files)) => {
+            let file = &files[index];
+            let color = match file.status.trim().chars().next() {
+                Some('A' | '?') => theme.added(),
+                Some('D') => theme.removed(),
+                _ => theme.accent(),
+            };
+            let path = if let Some(original) = &file.original_path {
+                format!("{} → {}", clean(original), clean(&file.path))
+            } else {
+                clean(&file.path)
+            };
+            let status = format!("  {} ", file.status.trim());
+            let available = width.saturating_sub(Line::raw(&status).width() as u16);
+            return Line::from(vec![
+                Span::styled(status, Style::default().fg(color)),
+                Span::styled(elide(&path, available, true), theme.muted()),
+            ]);
+        }
+    };
+    Line::styled(elide(&format!("  {message}"), width, false), theme.muted())
 }
 
 fn text_graph(
@@ -484,15 +569,17 @@ fn text_graph(
     theme: Theme,
     row: &crate::graph::Row,
     area: Rect,
-    y: u16,
+    y: i32,
+    height: usize,
     offset: usize,
 ) {
-    let mut put = |column: usize, line: u16, symbol: &str, c: usize, crossing: bool| {
+    let mut put = |column: usize, line: i32, symbol: &str, c: usize, crossing: bool| {
         let x = i32::from(area.x) + column as i32 - offset as i32;
         if x >= i32::from(area.x)
             && x < i32::from(area.right())
-            && line < area.bottom()
-            && let Some(cell) = frame.buffer_mut().cell_mut((x as u16, line))
+            && line >= i32::from(area.y)
+            && line < i32::from(area.bottom())
+            && let Some(cell) = frame.buffer_mut().cell_mut((x as u16, line as u16))
         {
             let symbol = if crossing
                 && matches!(cell.symbol(), "│" | "─" | "╭" | "╮" | "╰" | "╯")
@@ -523,12 +610,50 @@ fn text_graph(
         put(a, y + 1, if a < b { "╰" } else { "╯" }, edge.color, true);
         put(b, y + 1, if a < b { "╮" } else { "╭" }, edge.color, true);
     }
+    let first_line = ((i32::from(area.y) - y).max(0) as usize).max(2);
+    let last_line = ((i32::from(area.bottom()) - y).max(0) as usize).min(height);
+    for line in first_line..last_line {
+        for (column, lane) in row.below.iter().enumerate() {
+            if let Some(lane) = lane {
+                put(column * 3 + 1, y + line as i32, "│", lane.color, false);
+            }
+        }
+    }
     put(
         row.column * 3 + 1,
         y,
         if row.uncommitted { "○" } else { "●" },
         row.color,
         false,
+    );
+}
+
+fn scrollbar(
+    frame: &mut Frame,
+    theme: Theme,
+    area: Rect,
+    body: Rect,
+    length: usize,
+    visible: usize,
+    position: usize,
+) {
+    if length <= visible || body.height == 0 {
+        return;
+    }
+    // Ratatui expects the number of scroll positions, including the last viewport.
+    let mut state = ScrollbarState::new(length - visible + 1)
+        .viewport_content_length(visible)
+        .position(position);
+    frame.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("│"))
+            .track_style(Style::default().fg(theme.border()))
+            .thumb_symbol("┃")
+            .thumb_style(Style::default().fg(theme.accent())),
+        Rect::new(area.right() - 1, body.y, 1, body.height),
+        &mut state,
     );
 }
 
@@ -548,9 +673,8 @@ fn details(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(b, area);
     // Ref decorations can change while the immutable commit/diff stays cached.
     let refs = app
-        .repo
-        .commits
-        .get(app.selected)
+        .selected
+        .and_then(|index| app.repo.commits.get(index))
         .filter(|commit| !commit.is_worktree() && !commit.refs.is_empty())
         .map(|commit| format!("Refs: {}", commit.refs));
     let lines: Vec<_> = refs
@@ -590,7 +714,7 @@ fn footer(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         format!(
             "{} / {}{}",
-            app.selected + 1,
+            app.selected.map_or(0, |index| index + 1),
             app.repo.commits.len(),
             if app.repo.commit_count() == app.limit {
                 " · limit reached"
@@ -634,7 +758,18 @@ fn key_hints(app: &App, width: u16) -> String {
     }
     let mut hints = vec!["/ search", "? help", "q quit"];
     let extras: &[&str] = if app.sidebar {
-        &["↑↓ move", "r reload", "n/N matches", "h/l pan"]
+        &[
+            if app.selected.is_some() {
+                "Esc fold"
+            } else {
+                "Click files"
+            },
+            "↑↓ move",
+            "Enter toggle",
+            "r reload",
+            "n/N matches",
+            "h/l pan",
+        ]
     } else {
         &[
             "Tab panels",
@@ -726,7 +861,16 @@ fn help(frame: &mut Frame, app: &mut App, area: Rect) {
         "q: Quit graph",
         "Ctrl-C: Quit anytime",
     ];
-    if !app.sidebar {
+    if app.sidebar {
+        entries.extend([
+            "Wheel: Scroll without selecting",
+            "Click commit: Expand / fold files",
+            "↑↓: Select and expand a commit",
+            "Enter: Toggle files",
+            "Esc: Fold files and deselect",
+            "PgUp / PgDn: Scroll history",
+        ]);
+    } else {
         entries.extend([
             "Tab / Shift-Tab: Next / previous panel",
             "Enter in branches: Apply filter",
@@ -1000,7 +1144,7 @@ mod tests {
             assert_ne!(app.help_scroll, usize::MAX);
             press(&mut app, KeyCode::Char('q'));
             assert!(!app.help && !app.quit);
-            assert_eq!(app.selected, 0);
+            assert_eq!(app.selected, (!sidebar).then_some(0));
             press(&mut app, KeyCode::Char('?'));
             assert_eq!(app.help_scroll, 0);
             app.key(
@@ -1015,6 +1159,7 @@ mod tests {
     fn terminal_theme_keeps_panel_defaults_and_a_visible_selection_without_queries() {
         for sidebar in [false, true] {
             let mut app = App::new(crate::git::demo(), 2000, true).with_sidebar(sidebar);
+            app.selected = Some(0);
             let mut terminal = Terminal::new(TestBackend::new(140, 44)).unwrap();
             terminal
                 .draw(|frame| {
@@ -1128,10 +1273,11 @@ mod tests {
         for width in [24, 40] {
             for height in [9, 13, 25] {
                 let mut app = App::new(crate::git::demo(), 2000, true).with_sidebar(true);
-                app.selected = 1;
+                app.selected = Some(1);
+                app.top = 1;
                 app.theme = Theme::new(crate::theme::ThemeMode::Classic);
                 let lines = screen(&mut app, width, height);
-                let y = usize::from(app.history_area.y) + (app.selected - app.top) * 2;
+                let y = usize::from(app.history_area.y) + (app.selected.unwrap() - app.top) * 2;
                 assert_eq!(app.history_area.height % 2, 0);
                 assert!(y + 1 < usize::from(app.history_area.bottom()));
                 assert!(lines[y].contains("feature/"), "{}", lines[y]);
@@ -1160,7 +1306,8 @@ mod tests {
         for (width, height) in [(24, 8), (32, 12), (48, 30), (140, 44)] {
             for smooth in [false, true] {
                 let mut app = App::new(crate::git::demo(), 2000, true).with_sidebar(true);
-                app.selected = 8;
+                app.selected = Some(8);
+                app.top = 8;
                 let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
                 let mut view = None;
                 terminal
@@ -1170,8 +1317,11 @@ mod tests {
                     .unwrap();
                 let view = view.expect("Sidebar should fit in a narrow pane");
                 assert!(view.area.width > 0 && view.area.height > 0);
-                assert!(app.top <= app.selected);
-                assert!(app.selected < app.top + usize::from(app.history_area.height).div_ceil(2));
+                assert!(app.top <= app.selected.unwrap());
+                assert!(
+                    app.selected.unwrap()
+                        < app.top + usize::from(app.history_area.height).div_ceil(2)
+                );
                 assert_eq!(app.branches_area, Rect::default());
                 assert_eq!(app.detail_area, Rect::default());
                 let screen: String = terminal
@@ -1196,6 +1346,137 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_scrollbar_reaches_both_ends_of_an_expanded_file_list() {
+        let mut app = App::new(crate::git::demo(), 2000, true).with_sidebar(true);
+        let initial = screen(&mut app, 40, 20);
+        let first = usize::from(app.history_area.y);
+        let last = usize::from(app.history_area.bottom() - 1);
+        assert!(initial[first].ends_with('┃'));
+        assert!(!initial[last].ends_with('┃'));
+        app.selected = Some(0);
+        app.files = Some(Ok((0..40)
+            .map(|i| crate::git::ChangedFile {
+                status: "M".into(),
+                path: format!("src/file-{i:02}.rs"),
+                original_path: None,
+            })
+            .collect()));
+        screen(&mut app, 40, 20);
+        app.scroll_history_to(30);
+        let middle = screen(&mut app, 40, 20).join("\n");
+        assert!(middle.contains("file-28.rs"));
+        assert!(middle.contains("file-39.rs"));
+        assert!(app.history_rows.iter().any(Option::is_none));
+        assert!(app.top_offset > 2);
+        app.scroll_history_to(usize::MAX);
+        let end = screen(&mut app, 40, 20);
+        assert!(!end[first].ends_with('┃'));
+        assert!(end[last].ends_with('┃'));
+        app.scroll_history_to(0);
+        let beginning = screen(&mut app, 40, 20);
+        assert!(beginning[first].ends_with('┃'));
+        assert!(!beginning[last].ends_with('┃'));
+    }
+
+    #[test]
+    fn sidebar_expands_files_inline_at_narrow_sizes_in_each_theme() {
+        use crate::theme::ThemeMode;
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        for theme in [
+            Theme::new(ThemeMode::Terminal),
+            Theme::new(ThemeMode::Classic),
+            Theme {
+                foreground: Some((40, 40, 40)),
+                background: Some((255, 255, 255)),
+                ..Theme::default()
+            },
+        ] {
+            for (width, height) in [(24, 8), (32, 13), (40, 26), (140, 44)] {
+                let mut app = App::new(crate::git::demo(), 2000, true).with_sidebar(true);
+                app.theme = theme;
+                let before = screen(&mut app, width, height);
+                assert!(!before.join("\n").contains(['▸', '▾']));
+                assert_eq!(app.selected, None);
+                let visible = usize::from(app.history_area.height);
+                assert_eq!(
+                    before.join("\n").contains('┃'),
+                    app.history_total_rows() > visible
+                );
+                let mouse = |app: &mut App, kind, line| {
+                    app.mouse(
+                        MouseEvent {
+                            kind,
+                            column: app.history_area.x + 1,
+                            row: app.history_area.y + line,
+                            modifiers: KeyModifiers::NONE,
+                        },
+                        None,
+                    );
+                };
+                mouse(&mut app, MouseEventKind::ScrollDown, 0);
+                let top = app.top;
+                assert_eq!(
+                    app.history_scroll_position(),
+                    visible
+                        .min(3)
+                        .min(app.history_total_rows().saturating_sub(visible))
+                );
+                screen(&mut app, width, height);
+                assert_eq!(app.top, top);
+                assert_eq!(app.selected, None);
+                mouse(&mut app, MouseEventKind::Down(MouseButton::Left), 0);
+                let changes = screen(&mut app, width, height).join("\n");
+                assert!(changes.contains("GIT GRAPH"));
+                assert!(!changes.contains(['▸', '▾']));
+                assert!(!changes.contains("COMMIT INSPECTOR"));
+                assert!(changes.contains("graph.rs"), "{width}x{height}: {changes}");
+                assert_eq!(app.detail_area, Rect::default());
+                assert!(!app.show_details);
+                assert_eq!(app.selected, Some(top));
+                let file_line = app.history_rows.iter().position(Option::is_none).unwrap() as u16;
+                mouse(&mut app, MouseEventKind::Down(MouseButton::Left), file_line);
+                assert_eq!(app.selected, Some(top));
+                app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), None);
+                let graph = screen(&mut app, width, height).join("\n");
+                assert!(graph.contains("GIT GRAPH"));
+                assert!(!graph.contains("graph.rs"));
+                assert_eq!(app.selected, None);
+                assert_eq!(app.top, top);
+                screen(&mut app, 20, 8);
+                assert!(app.history_rows.is_empty());
+                assert_eq!(app.history_area, Rect::default());
+            }
+        }
+    }
+
+    #[test]
+    fn inline_files_show_loading_empty_error_and_rename_states() {
+        let mut app = App::new(crate::git::demo(), 2000, false).with_sidebar(true);
+        app.selected = Some(0);
+        app.selection_changed();
+        let loading = screen(&mut app, 60, 20).join("\n");
+        assert!(loading.contains("Loading files…"));
+        app.files = Some(Ok(Vec::new()));
+        let empty = screen(&mut app, 60, 20).join("\n");
+        assert!(empty.contains("No changed files"));
+        app.files = Some(Err("failed".into()));
+        let error = screen(&mut app, 60, 20).join("\n");
+        assert!(error.contains("Cannot load files · r retry"));
+        app.files = Some(Ok(vec![crate::git::ChangedFile {
+            status: "R100".into(),
+            path: "new-name.txt".into(),
+            original_path: Some("old-name.txt".into()),
+        }]));
+        let renamed = screen(&mut app, 60, 20).join("\n");
+        assert!(renamed.contains("R100 old-name.txt → new-name.txt"));
+        assert!(!renamed.contains("COMMIT INSPECTOR"));
+        app.top_offset = usize::MAX;
+        screen(&mut app, 60, 20);
+        assert!(app.top < app.repo.commits.len());
+        assert!(app.top_offset < app.history_row_height(app.top));
+    }
+
+    #[test]
     fn sidebar_empty_history_and_small_resize_clear_mouse_targets() {
         let mut repo = crate::git::demo();
         repo.commits.clear();
@@ -1217,7 +1498,7 @@ mod tests {
     fn responsive_views_and_wide_text_do_not_panic() {
         for (width, height) in [(20, 8), (64, 18), (95, 30), (132, 42), (200, 60)] {
             let mut app = App::new(crate::git::demo(), 2000, true);
-            app.selected = 8;
+            app.selected = Some(8);
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal
                 .draw(|frame| {

@@ -4,6 +4,8 @@
 
 ## Panels
 
+The full view has three panels. The sidebar keeps the history graph visible and expands changed-file lists inline.
+
 **Branches** lists local and remote-tracking branches. Press Enter to show the commits reachable from the selected branch. Press `a` to include all local refs and the current HEAD again. Tags appear alongside commits in History.
 
 **History** puts branch and tag badges above commit subjects. The current branch has a solid badge marked `●`; other local branches and tags use softer backgrounds, and remote branches use purple-toned badges (the terminal's magenta palette entry). Remote-tracking branches, including symbolic remote HEAD aliases, keep their own badges even when they point to the same commit as a local branch. Badges are prioritized as current branch, local branches, tags, then remotes; overflow appears as `+N`. Subjects stay on one line with `…` when truncated. Hashes and complete ref labels remain in the commit inspector, not the history list. Author and date appear when space permits. Search still matches messages, authors, refs, and hashes while preserving the full graph topology of the loaded view.
@@ -12,7 +14,9 @@
 
 The full view's minimum pane size is 64 columns × 18 rows. Around 120 columns or more gives the history more room. In narrower panes, the branch list is hidden until you focus it with Tab.
 
-## Graph-only sidebar
+<a id="graph-only-sidebar"></a>
+
+## Sidebar
 
 ```bash
 # Open or reuse the workspace's shared sidebar, keeping the current focus
@@ -26,12 +30,16 @@ herdr plugin pane open --plugin herdr.git-graph --entrypoint sidebar \
   --placement split --direction right --target-pane "$HERDR_PANE_ID" \
   --cwd /path/to/repository --no-focus
 
-# Use graph-only layout in an existing terminal pane, or preview it
+# Use the sidebar layout in an existing terminal pane, or preview it
 ./bin/herdr-git-graph --repo /path/to/repository --sidebar
 ./bin/herdr-git-graph --demo --sidebar --width 40 --height 24 --snapshot sidebar.svg
 ```
 
-The sidebar displays only the history graph and commit list, with repository and HEAD context above it. Each commit retains two terminal rows for graph connections. Commits with branch or tag badges show badges first and a one-line subject below; other commits show just the subject. Hashes are hidden. The branch list, author/date columns, and diff inspector are hidden, and commit diffs are not loaded in this mode. Use the full view to inspect complete messages, refs, and hashes.
+By default, the sidebar starts with no commit selected, showing the graph and commit list with repository and HEAD context above it. Each collapsed commit retains two terminal rows for graph connections. Commits with branch or tag badges show badges first and a one-line subject below; other commits show just the subject. Hashes, the branch list, and author/date columns are hidden in this layout.
+
+Click a commit node or row to select it and expand its changed-file statuses and paths immediately below it. The graph stays visible. Click the same commit again or press `Esc` to collapse the list and clear the selection. Keyboard users can select and expand commits with `↑` / `↓` or `j` / `k`; `Enter` collapses the selected commit, or expands the top commit if none is selected. File lists load asynchronously. The sidebar shows filenames only, with no diff inspector or patch action on file clicks; use the full view for patches, complete messages, refs, and hashes.
+
+The mouse wheel scrolls freely through history and expanded file lists without changing the selection, even when a file list is taller than the viewport. `PageUp` / `PageDown` scroll by viewport rows. A scrollbar on the right shows your position, including rows within expanded lists.
 
 The `herdr.git-graph.sidebar` action keeps one shared sidebar per Herdr server socket and workspace. Repeating the action reuses that pane rather than creating another split. If it is on another tab, the action moves it to the invocation's source tab. Other workspaces have their own sidebar. Direct `plugin pane open` and standalone `--sidebar` launches are not registered for sharing and remain independent. The `herdr.git-graph.toggle-sidebar` action uses the same shared sidebar: it opens one when absent, or closes the registered pane and ends sharing when present. It does not close independent sidebars or panes in another workspace. Toggling off saves the last chosen width separately from the active pane registration. The next toggle or open action in that workspace restores the saved width; hooks still leave the sidebar closed until explicitly opened. A failed close keeps the saved registration for retry.
 
@@ -41,9 +49,9 @@ Herdr refuses cross-tab moves when either the source or destination tab is zoome
 
 The first open requests a 40-column outer width so the full `Uncommitted changes` subject fits alongside the graph, including room for Herdr borders and its scrollbar. Adjust the split width by dragging the divider or using Herdr's resize mode (`prefix+r` by default). The chosen outer width is remembered for moves, tab-close recovery, and toggle reopen, constrained only by Herdr's 10–90% split-ratio limits; it is no longer capped at half the target pane's width. A narrow destination can temporarily reduce the actual width without changing the remembered target. Moving to a wider tab or recreating the sidebar after a tab closes requests that target width again. Direct `plugin pane open` and standalone `--sidebar` use the size supplied by the host. The minimum content size is 24 columns × 8 rows.
 
-Focus the sidebar with `prefix+l` from the pane on its left. Search, `n`/`N`, navigation, graph panning, mouse selection/scrolling, `r`, help, and quit work as usual. `Tab`, `Shift-Tab`, `Enter` outside search, and `d` keep the graph-only layout. Close it with `q` while it is focused (`q` closes Help first), or close its pane, to end sharing. Event hooks do not reopen an explicitly closed sidebar, even if its former tab is closed afterward; the next explicit sidebar action creates it again.
+Focus the sidebar with `prefix+l` from the pane on its left. Search, `n`/`N`, navigation, graph panning, `r`, help, and quit remain available. `Enter` applies an active search; otherwise it toggles the inline file list. `Tab`, `Shift-Tab`, and `d` do not switch panels in the sidebar. Close it with `q` while it is focused (`q` closes Help first), or close its pane, to end sharing. Event hooks do not reopen an explicitly closed sidebar, even if its former tab is closed afterward; the next explicit sidebar action creates it again.
 
-Closing the tab containing a shared sidebar does not end sharing if another tab remains in the same workspace. A `tab.closed` hook recreates it on the remaining active tab without taking focus, using the original repository and theme even if the destination is not a Git directory. Herdr terminates the old process when its tab closes; the new process restores the saved selected commit, viewport, horizontal graph position, search query/mode, and target width. If a saved commit is no longer in the loaded history, selection and viewport fall back to valid indices; the viewport also adapts to the available height. Recreation can cause a brief layout change. If the workspace is not focused, restoration waits until it is focused again. Closing the last tab removes the workspace and does not recreate its sidebar elsewhere.
+Closing the tab containing a shared sidebar does not end sharing if another tab remains in the same workspace. A `tab.closed` hook recreates it on the remaining active tab without taking focus, using the original repository and theme even if the destination is not a Git directory. Herdr terminates the old process when its tab closes; the new process restores the saved selection (including no selection), viewport, horizontal graph position, search query/mode, and target width. A restored selection expands that commit again and reloads its file list asynchronously. The viewport includes the top commit and the row offset within it, so it can resume partway through a long file list; older saved states default to row offset zero. If a saved commit is no longer in the loaded history, selection and viewport fall back to valid indices. Row offsets are normalized to the available rows as file lists load and the pane is resized. The sidebar viewport remains independent of selection, which can be off-screen. Recreation can cause a brief layout change. If the workspace is not focused, restoration waits until it is focused again. Closing the last tab removes the workspace and does not recreate its sidebar elsewhere.
 
 The action takes its target from the invocation's focused pane. When opening the pane explicitly, run the command above inside Herdr, or pass a known pane ID with `--target-pane`. Split panes must not use `--workspace`.
 
@@ -53,7 +61,7 @@ Suggested bindings are `prefix+u` for `herdr.git-graph.toggle-sidebar` and `pref
 
 When the current checkout has changes, a hollow node labeled **Uncommitted changes** appears above HEAD. Its second line counts staged, unstaged, untracked, and conflicted files. A partially staged file contributes to both staged and unstaged counts. The node appears in the all-refs view and when filtering the checked-out local branch, including detached HEAD and repositories with no commits. Other branch filters omit it. It does not count toward `--limit` or the commit count.
 
-Select the node in the full view to see file statuses and separate staged and unstaged patches. Rename paths and conflicts are included. Untracked files are listed as `??`; their contents are not included in the patch. Ignored untracked files are omitted. The sidebar shows the node and counts without loading diffs.
+Select the node in the full view to see file statuses and separate staged and unstaged patches. In the sidebar, selecting it expands only the changed-file statuses and paths below the node. Rename paths and conflicts are included. Untracked files are listed as `??`; their contents are not included in the patch. Ignored untracked files are omitted.
 
 Local changes are checked in a background worker every **2 seconds**, so updates normally appear within about 2 seconds plus Git query time. File edits, staging, commits, tags, checkout, and local ref updates after a fetch are picked up automatically. The displayed working tree diff is reread even if a file's status remains modified after another edit. Existing selection, search, focus, and scroll position are preserved where possible; when a selected WIP node disappears, selection moves to HEAD.
 
@@ -70,25 +78,25 @@ Git runs with `--no-optional-locks`, so background status queries do not rewrite
 
 | Input | Action |
 | --- | --- |
-| `Tab` / `Shift-Tab` | Next / previous panel |
-| `↑` `↓` / `j` `k` | Navigate items or scroll the inspector |
+| `Tab` / `Shift-Tab` | Next / previous panel in the full view |
+| `↑` `↓` / `j` `k` | Select and expand commits in the sidebar; navigate items or scroll the inspector in the full view |
 | `Enter` in Branches | Apply the selected branch filter |
-| `Enter` in History | Open and focus the inspector |
-| `PageUp` / `PageDown` | Move one page |
+| `Enter` in History | Toggle the inline file list in the sidebar; open and focus the inspector in the full view |
+| `PageUp` / `PageDown` | Scroll viewport rows in the sidebar; move one page in the full view |
 | `Home` / `End`, or `g` / `G` | First / last item |
 | `←` `→` / `h` `l` in History | Pan graph columns horizontally |
 | `←` `→` / `h` `l` in Inspector | Scroll diff text horizontally |
 | `/` | Enter search mode |
 | `Enter` while searching | Keep the query and return to navigation |
 | `n` / `N` | Next / previous match, wrapping at the ends |
-| `Esc` | Clear search and focus History; close Help if open |
+| `Esc` | Close Help or clear search; collapse the sidebar file list and deselect |
 | `a` | Load all branches |
 | `r` | Reload the current local history view |
-| `d` | Show / hide the inspector |
+| `d` | Show / hide the inspector in the full view |
 | `?` | Open / close Help |
 | `q` / `Ctrl-C` | Quit; `q` closes Help first if it is open |
-| Left click | Select a commit or apply a branch filter |
-| Mouse wheel | Scroll the panel under the pointer |
+| Left click | Expand a commit's file list in the sidebar; click the same commit to collapse; select a commit or apply a branch filter in the full view |
+| Mouse wheel | Scroll the panel under the pointer; sidebar history and expanded file lists scroll without changing selection |
 
 Footer hints keep complete key/action pairs at every supported width, always showing `/ search`, `? help`, and `q quit` outside search. Additional hints appear as space allows. Long search input scrolls to keep the cursor visible. Help wraps to the available width and scrolls with `↑↓` / `j` / `k`, `PgUp` / `PgDn`, and `Home` / `End` (or `g` / `G`); `Esc`, `?`, or `q` closes Help. `Ctrl-C` quits immediately, including during search and Help.
 

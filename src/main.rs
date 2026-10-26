@@ -60,7 +60,7 @@ struct Args {
     /// Open the registered plugin in a new Herdr tab
     #[arg(long, conflicts_with_all = ["demo", "snapshot", "graph_png", "check"])]
     open_pane: bool,
-    /// Open a graph-only sidebar to the right of the current Herdr pane
+    /// Open a history sidebar to the right of the current Herdr pane
     #[arg(long, conflicts_with_all = ["open_pane", "sidebar", "demo", "snapshot", "graph_png", "check"])]
     open_sidebar: bool,
     /// Open or close the workspace's shared graph sidebar
@@ -69,7 +69,7 @@ struct Args {
     /// Follow the active workspace tab (internal plugin event hook)
     #[arg(long, hide = true, conflicts_with_all = ["open_pane", "open_sidebar", "sidebar", "demo", "snapshot", "graph_png", "check"])]
     sync_sidebar: bool,
-    /// Show only the graph and commit list, suitable for narrow side panes
+    /// Browse history and expand changed files in a narrow sidebar
     #[arg(long, conflicts_with = "open_pane")]
     sidebar: bool,
     /// Write a reproducible SVG of the Ratatui screen, then exit
@@ -159,7 +159,9 @@ fn main() -> Result<()> {
         let view = Viewport {
             area: ratatui::layout::Rect::new(0, 0, width, height),
             top: 0,
-            selected: 0,
+            top_offset: 0,
+            expanded: None,
+            selected: app.selected,
             column_offset: 0,
         };
         herdr_git_graph::graphics::rasterize(&app.graph, view, (18, 36), app.theme)?

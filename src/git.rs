@@ -346,6 +346,80 @@ pub fn parse_log(raw: &str) -> Result<Vec<Commit>> {
         .collect())
 }
 
+/// List changed paths without loading a patch. Merge commits use their first parent.
+pub fn changed_files(root: &Path, oid: &str) -> Result<Vec<ChangedFile>> {
+    if oid == WORKTREE_OID {
+        return Ok(working_tree(root)?.files);
+    }
+    if !oid.bytes().all(|b| b.is_ascii_hexdigit()) || oid.is_empty() {
+        bail!("Invalid commit id");
+    }
+    let ancestry = run(
+        root,
+        &["rev-list", "--parents", "-n", "1", oid, "--"],
+        65536,
+    )?;
+    let mut revisions = ancestry.split_whitespace();
+    let commit = revisions.next().context("Git commit missing")?;
+    let parent = revisions.next();
+    let mut args = vec![
+        "diff-tree",
+        "--root",
+        "--no-commit-id",
+        "--name-status",
+        "-r",
+        "-z",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--find-renames",
+    ];
+    if let Some(parent) = parent {
+        args.push(parent);
+    }
+    args.extend([commit, "--"]);
+    // Unlike patch previews, an oversized file list must fail, not return a partial list.
+    parse_changed_files(&run(root, &args, 8 * 1024 * 1024)?)
+}
+
+fn parse_changed_files(raw: &str) -> Result<Vec<ChangedFile>> {
+    if !raw.is_empty() && !raw.ends_with('\0') {
+        bail!("Git changed-file record is incomplete");
+    }
+    let mut files = Vec::new();
+    let mut records = raw.split_terminator('\0');
+    while let Some(status) = records.next() {
+        let bytes = status.as_bytes();
+        if bytes.is_empty()
+            || !matches!(
+                bytes[0],
+                b'A' | b'C' | b'D' | b'M' | b'R' | b'T' | b'U' | b'X' | b'B'
+            )
+            || !bytes[1..].iter().all(u8::is_ascii_digit)
+        {
+            bail!("Invalid Git changed-file status");
+        }
+        let first_path = records
+            .next()
+            .filter(|path| !path.is_empty())
+            .context("Git changed-file path missing")?;
+        let (path, original_path) = if matches!(bytes[0], b'R' | b'C') {
+            let path = records
+                .next()
+                .filter(|path| !path.is_empty())
+                .context("Git rename/copy destination missing")?;
+            (path, Some(first_path.to_owned()))
+        } else {
+            (first_path, None)
+        };
+        files.push(ChangedFile {
+            status: status.to_owned(),
+            path: path.to_owned(),
+            original_path,
+        });
+    }
+    Ok(files)
+}
+
 pub fn details(root: &Path, oid: &str) -> Result<String> {
     if oid == WORKTREE_OID {
         return working_tree_details(root, &working_tree(root)?);

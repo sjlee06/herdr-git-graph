@@ -1,6 +1,6 @@
 # Herdr Git Graph
 
-**Keep Git history beside your code. Open the full view to inspect a diff.**
+**Keep Git history beside your code. Expand a commit to see its changed files.**
 
 [![CI](https://github.com/sjlee06/herdr-git-graph/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sjlee06/herdr-git-graph/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -8,7 +8,7 @@
 
 English · [한국어](README.ko.md)
 
-A read-only Git graph plugin for Herdr, with a sidebar for browsing history and a full view for inspecting changes.
+A read-only Git graph plugin for Herdr. Browse history and expand changed-file lists inline in the sidebar, or use the full view for branch filtering and diffs.
 
 <table>
   <tr>
@@ -29,6 +29,7 @@ A read-only Git graph plugin for Herdr, with a sidebar for browsing history and 
 
 - **Workspace-shared sidebar** — one sidebar follows the active tab without taking focus, keeping its view state.
 - **Branch and merge graph** — colored lanes with distinct current-branch, local-branch, remote-branch, and tag badges.
+- **Changed files** — expand a commit's file statuses and paths below it without hiding the sidebar graph.
 - **Diffs** — inspect commits and staged or unstaged changes in the full view.
 - **Search** — find commits by message, author, ref, or hash.
 - **Live updates** — local changes appear automatically, checked every 2 seconds by default.
@@ -77,7 +78,7 @@ Drag the divider or use `prefix+r` to resize the sidebar. Use `prefix+l` to focu
 
 *Filter branches and inspect commit diffs. Demo shown.*
 
-Open the full graph in a new tab to filter branches and inspect changes:
+Open the full graph in a new tab for branch filtering and a split-panel diff inspector:
 
 ```bash
 herdr plugin action invoke herdr.git-graph.open
@@ -105,20 +106,24 @@ Run `herdr config check`, then `herdr server reload-config`. Press your prefix f
 
 ## Use
 
+By default, the sidebar starts with no commit selected. Click a commit node or row to select it and expand its changed-file statuses and paths immediately below it; the graph stays visible. Click the same commit again or press **Esc** to collapse the list and clear the selection. **↑** / **↓** select and expand commits; **Enter** toggles the expansion. The wheel scrolls freely through history and long file lists without changing the selection, and the scrollbar on the right shows your position. The sidebar lists filenames only; use the full view to inspect patches.
+
 In the full view, select a branch and press **Enter** to filter its history; press **a** to show all branches again. Select a commit or **Uncommitted changes** to inspect its diff below.
 
 | Key | Action |
 | --- | --- |
 | `Tab` / `Shift-Tab` | Switch panels in the full view |
-| `↑` `↓` / `j` `k` | Navigate items or scroll the diff |
-| `Enter` | Apply search; in the full view, apply a branch filter / focus the inspector |
+| `↑` `↓` / `j` `k` | Select and expand commits in the sidebar; navigate items or scroll the diff in the full view |
+| `Enter` | Apply search; toggle the inline file list in the sidebar; apply a branch filter / focus the inspector in the full view |
+| `h` / `l` | Scroll diff text horizontally, or pan the graph in History |
+| `Esc` | Collapse the sidebar file list and deselect; clear search / close Help |
 | `/`, then `n` / `N` | Search, then jump between matches |
 | `a` | Show all branches |
 | `r` | Reload local Git history |
 | `?` | Open / close Help |
 | `q` / `Ctrl-C` | Quit (`q` closes Help first) |
 
-Mouse clicks select items; the wheel scrolls the panel under the pointer.
+In the full view, mouse clicks select items. The wheel scrolls the panel under the pointer.
 
 The viewer reads local Git data. Fetch in your normal Git workflow to see new remote commits. Search covers the loaded history: **2,000 commits by default**, configurable with `--limit`.
 

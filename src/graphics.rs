@@ -19,7 +19,11 @@ use {
 pub struct Viewport {
     pub area: Rect,
     pub top: usize,
-    pub selected: usize,
+    /// Terminal rows already scrolled within the top commit.
+    pub top_offset: usize,
+    /// Commit index and extra rows inserted after its standard two rows.
+    pub expanded: Option<(usize, usize)>,
+    pub selected: Option<usize>,
     pub column_offset: usize,
 }
 
@@ -46,11 +50,18 @@ pub fn rasterize(graph: &Graph, view: Viewport, cell: (u32, u32), theme: Theme) 
     let cw = cell.0 as f32;
     let ch = cell.1 as f32;
     let x = |column: usize| (column as f32 * 3.0 + 1.5 - view.column_offset as f32) * cw;
-    let visible = usize::from(view.area.height / 2);
     let mut nodes = Vec::new();
-    for (index, row) in graph.rows.iter().enumerate().skip(view.top).take(visible) {
-        let y = ((index - view.top) * 2) as f32 * ch;
-        if index == view.selected
+    let mut y = -(view.top_offset as f32) * ch;
+    for (index, row) in graph.rows.iter().enumerate().skip(view.top) {
+        if y >= height as f32 {
+            break;
+        }
+        let extra = view
+            .expanded
+            .filter(|(expanded, _)| *expanded == index)
+            .map_or(0, |(_, extra)| extra);
+        let row_height = (2.0 + extra as f32) * ch;
+        if Some(index) == view.selected
             && let Some(bg) = theme.selection_rgb()
         {
             let rect = tiny_skia::Rect::from_xywh(0.0, y, width as f32, 2.0 * ch).unwrap();
@@ -70,7 +81,7 @@ pub fn rasterize(graph: &Graph, view: Viewport, cell: (u32, u32), theme: Theme) 
             let mut path = PathBuilder::new();
             path.move_to(x(edge.from), y + 0.5 * ch);
             if edge.from == edge.to {
-                path.line_to(x(edge.to), y + 2.0 * ch);
+                path.line_to(x(edge.to), y + row_height);
             } else {
                 path.cubic_to(
                     x(edge.from),
@@ -80,6 +91,11 @@ pub fn rasterize(graph: &Graph, view: Viewport, cell: (u32, u32), theme: Theme) 
                     x(edge.to),
                     y + 2.0 * ch,
                 );
+                // Keep the bend beside the commit, then carry its target lane
+                // through any expanded file rows to the next commit.
+                if extra > 0 {
+                    path.line_to(x(edge.to), y + row_height);
+                }
             }
             stroke(&mut pixmap, path, theme.lane_rgb(edge.color), cw);
         }
@@ -87,9 +103,10 @@ pub fn rasterize(graph: &Graph, view: Viewport, cell: (u32, u32), theme: Theme) 
             x(row.column),
             y + 0.5 * ch,
             row.color,
-            index == view.selected,
+            Some(index) == view.selected,
             row.uncommitted,
         ));
+        y += row_height;
     }
     for (x, y, color, selected, uncommitted) in nodes {
         let rgb = theme.lane_rgb(color);
@@ -340,7 +357,9 @@ mod tests {
             let view = Viewport {
                 area: Rect::new(0, 0, 14, 16),
                 top: 0,
-                selected: 1,
+                top_offset: 0,
+                expanded: None,
+                selected: Some(1),
                 column_offset: 0,
             };
             let image = rasterize(&graph, view, (10, 20), theme).unwrap();
@@ -368,6 +387,167 @@ mod tests {
                     .iter()
                     .any(|p| (p.red(), p.green(), p.blue(), p.alpha()) == (51, 170, 136, 255))
             );
+        }
+    }
+
+    #[test]
+    fn no_selection_leaves_background_and_node_ring_unpainted() {
+        let mut commits = crate::git::demo().commits;
+        commits.truncate(1);
+        commits[0].parents.clear();
+        let graph = Graph::build(&commits);
+        let view = Viewport {
+            area: Rect::new(0, 0, 4, 2),
+            top: 0,
+            top_offset: 0,
+            expanded: None,
+            selected: None,
+            column_offset: 0,
+        };
+        for theme in [
+            Theme::new(ThemeMode::Classic),
+            Theme {
+                background: Some((20, 20, 20)),
+                foreground: Some((230, 230, 230)),
+                ..Theme::default()
+            },
+            Theme::default(),
+        ] {
+            let image = rasterize(&graph, view, (10, 20), theme).unwrap();
+            let selected = rasterize(
+                &graph,
+                Viewport {
+                    selected: Some(0),
+                    ..view
+                },
+                (10, 20),
+                theme,
+            )
+            .unwrap();
+            let background = if theme.mode == ThemeMode::Classic {
+                (CLASSIC_BG.0, CLASSIC_BG.1, CLASSIC_BG.2, 255)
+            } else {
+                (0, 0, 0, 0)
+            };
+            for x in [0, 21] {
+                let pixel = image.pixel(x, 10).unwrap();
+                assert_eq!(
+                    (pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()),
+                    background,
+                    "An unselected graph must not paint a row background or node ring"
+                );
+            }
+            assert!(image.pixel(15, 10).unwrap().alpha() > 0);
+            assert_ne!(image.pixel(21, 10), selected.pixel(21, 10));
+            if theme.selection_rgb().is_some() {
+                assert_ne!(image.pixel(0, 10), selected.pixel(0, 10));
+            }
+        }
+    }
+
+    fn expansion_graph() -> Graph {
+        let mut commits = crate::git::demo().commits;
+        commits.truncate(3);
+        commits[0].parents = vec![commits[1].oid.clone(), commits[2].oid.clone()];
+        commits[1].parents = vec![commits[2].oid.clone()];
+        commits[2].parents.clear();
+        Graph::build(&commits)
+    }
+
+    #[test]
+    fn expanded_rows_shift_nodes_and_preserve_lanes_without_extending_selection() {
+        let graph = expansion_graph();
+        let theme = Theme::new(ThemeMode::Classic);
+        let view = Viewport {
+            area: Rect::new(0, 0, 7, 9),
+            top: 0,
+            top_offset: 0,
+            expanded: Some((0, 3)),
+            selected: Some(0),
+            column_offset: 0,
+        };
+        let image = rasterize(&graph, view, (10, 20), theme).unwrap();
+        let original = rasterize(
+            &graph,
+            Viewport {
+                expanded: None,
+                ..view
+            },
+            (10, 20),
+            theme,
+        )
+        .unwrap();
+        let background = original.pixel(0, 40).unwrap();
+        assert_ne!(image.pixel(0, 20).unwrap(), background);
+        for y in 40..100 {
+            assert_eq!(image.pixel(0, y).unwrap(), background);
+            // Both the straight first-parent lane and curved second-parent
+            // lane must continue through every inserted terminal row.
+            for x in [15, 45] {
+                assert_ne!(image.pixel(x, y).unwrap(), background);
+            }
+        }
+        assert_eq!(image.pixel(17, 50).unwrap(), background);
+        for (x, old_y) in [(17, 50), (47, 90)] {
+            assert_ne!(original.pixel(x, old_y).unwrap(), background);
+            assert_eq!(
+                image.pixel(x, old_y + 60),
+                original.pixel(x, old_y),
+                "Later commit nodes must move down by the expanded row count"
+            );
+        }
+        let stride = image.width() as usize * 4;
+        assert_eq!(
+            &image.data()[100 * stride..160 * stride],
+            &original.data()[40 * stride..100 * stride],
+            "All later graph rows, not only the first following node, must shift"
+        );
+    }
+
+    #[test]
+    fn scrolled_expansion_clips_to_top_offset_and_renders_partial_bottom_commit() {
+        let graph = expansion_graph();
+        let theme = Theme::new(ThemeMode::Classic);
+        let view = Viewport {
+            area: Rect::new(0, 0, 7, 9),
+            top: 0,
+            top_offset: 0,
+            expanded: Some((0, 3)),
+            selected: Some(0),
+            column_offset: 0,
+        };
+        let full = rasterize(&graph, view, (10, 20), theme).unwrap();
+        for top_offset in [1, 3, 4] {
+            let clipped = rasterize(
+                &graph,
+                Viewport {
+                    area: Rect::new(0, 0, 7, 5),
+                    top_offset,
+                    ..view
+                },
+                (10, 20),
+                theme,
+            )
+            .unwrap();
+            let start = top_offset * 20 * full.width() as usize * 4;
+            // Tiny-skia can tessellate a cubic differently when its bounds
+            // cross the clip edge. Allow small antialiasing differences rather
+            // than demanding byte-identical pixels from independently clipped
+            // curves; shifted nodes, missing lanes, or selection still fail.
+            for (index, (actual, expected)) in clipped
+                .data()
+                .iter()
+                .zip(&full.data()[start..start + clipped.data().len()])
+                .enumerate()
+            {
+                assert!(
+                    actual.abs_diff(*expected) <= 32,
+                    "Scrolling {top_offset} terminal rows differs at pixel ({}, {}), channel {}: {actual} vs {expected}",
+                    index / 4 % full.width() as usize,
+                    index / 4 / full.width() as usize,
+                    index % 4,
+                );
+            }
         }
     }
 
@@ -418,7 +598,9 @@ mod tests {
         let view = Viewport {
             area: Rect::new(0, 0, 14, 16),
             top: 1,
-            selected: 2,
+            top_offset: 0,
+            expanded: None,
+            selected: Some(2),
             column_offset: 0,
         };
         let image = rasterize(&graph, view, (10, 20), Theme::new(ThemeMode::Classic)).unwrap();
