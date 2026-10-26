@@ -35,11 +35,13 @@ herdr plugin pane open --plugin herdr.git-graph --entrypoint sidebar \
 ./bin/herdr-git-graph --demo --sidebar --width 40 --height 24 --snapshot sidebar.svg
 ```
 
-By default, the sidebar starts with no commit selected, showing the graph and commit list with repository and HEAD context above it. Each collapsed commit retains two terminal rows for graph connections. Commits with branch or tag badges show badges first and a one-line subject below; other commits show just the subject. Hashes, the branch list, and author/date columns are hidden in this layout.
+By default, the sidebar starts with no commit selected or row highlighted, showing the graph and commit list with repository and HEAD context above it. Each collapsed commit retains two terminal rows for graph connections. Commits with branch or tag badges show badges first and a one-line subject below; other commits show just the subject. Hashes, the branch list, and author/date columns are hidden in this layout.
 
 Click a commit node or row to select it and expand its changed-file statuses and paths immediately below it. The graph stays visible. Click the same commit again or press `Esc` to collapse the list and clear the selection. Keyboard users can select and expand commits with `↑` / `↓` or `j` / `k`; `Enter` collapses the selected commit, or expands the top commit if none is selected. File lists load asynchronously.
 
 Click a file to open its diff inside the sidebar; `Esc` returns to the same expanded list and scroll position. Keyboard users can press `Tab` to focus the file list, select a file with `↑` / `↓` or `j` / `k`, and press `Enter` to open its diff. `Tab` returns to commit navigation; `Esc` collapses the list. In the diff view, the wheel, `↑` / `↓`, and `PageUp` / `PageDown` scroll the patch; `h` / `l` pan horizontally, and `r` reloads that file. Use the full view for complete commit diffs, messages, refs, and hashes.
+
+Compare the current [unselected history](preview-sidebar-light.png), [expanded file list](preview-sidebar-files-light.png), and [file diff](preview-sidebar-diff-light.png). These snapshots render the same sample repository with the current UI; they are not live Herdr window captures.
 
 The mouse wheel scrolls freely through history and expanded file lists without changing the selection, even when a file list is taller than the viewport. `PageUp` / `PageDown` scroll by viewport rows. A scrollbar on the right shows your position, including rows within expanded lists.
 
@@ -129,7 +131,7 @@ Headless `--snapshot` and `--graph-png` exports cannot query the user's terminal
 
 ## Renderers
 
-[Text-mode preview](preview-text.svg).
+[Text-mode preview](preview-text.png) · [SVG](preview-text.svg).
 
 ```bash
 ./bin/herdr-git-graph --renderer auto

@@ -1,6 +1,6 @@
 # Herdr Git Graph
 
-**Keep Git history beside your code. Expand a commit to see its changed files.**
+**Browse Git history beside your code. Click through to file diffs.**
 
 [![CI](https://github.com/sjlee06/herdr-git-graph/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sjlee06/herdr-git-graph/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -8,7 +8,7 @@
 
 English · [한국어](README.ko.md)
 
-A read-only Git graph plugin for Herdr. Browse history and expand changed-file lists inline in the sidebar, or use the full view for branch filtering and diffs.
+A read-only Git graph plugin for Herdr. Browse history, expand a commit’s changed files, and click a file to inspect its diff inside the sidebar. Use the full view for branch filtering and complete commit diffs.
 
 <table>
   <tr>
@@ -16,12 +16,12 @@ A read-only Git graph plugin for Herdr. Browse history and expand changed-file l
     <th width="50%">Light · Tomorrow</th>
   </tr>
   <tr>
-    <td><a href="docs/preview-sidebar-dark.png"><img src="docs/preview-sidebar-dark.png" width="360" alt="Dark sidebar with branch and tag badges above commit subjects"></a></td>
-    <td><a href="docs/preview-sidebar-light.png"><img src="docs/preview-sidebar-light.png" width="360" alt="Tomorrow light sidebar showing the same demo history"></a></td>
+    <td><a href="docs/preview-sidebar-dark.png"><img src="docs/preview-sidebar-dark.png" width="360" alt="Default dark sidebar with no selected commit or highlighted row"></a></td>
+    <td><a href="docs/preview-sidebar-light.png"><img src="docs/preview-sidebar-light.png" width="360" alt="Default Tomorrow light sidebar with the same unselected sample history"></a></td>
   </tr>
 </table>
 
-*The same sidebar demo in dark and light colors. Click an image to enlarge it.*
+*The default sidebar has no selected commit or highlighted row. Both images render the same sample repository in Classic and Tomorrow colors. Click an image to enlarge it.*
 
 [See the sidebar beside an editor in Herdr](docs/preview-sidebar.png) (demo composite). The default `--theme auto` follows your terminal's colors.
 
@@ -76,7 +76,7 @@ Drag the divider or use `prefix+r` to resize the sidebar. Use `prefix+l` to focu
   </tr>
 </table>
 
-*Filter branches and inspect commit diffs. Demo shown.*
+*The same sample repository in the full view, with a commit selected and its inspector scrolled to a file patch.*
 
 Open the full graph in a new tab for branch filtering and a split-panel diff inspector:
 
@@ -106,9 +106,24 @@ Run `herdr config check`, then `herdr server reload-config`. Press your prefix f
 
 ## Use
 
-By default, the sidebar starts with no commit selected. Click a commit node or row to select it and expand its changed-file statuses and paths immediately below it; the graph stays visible. Click the same commit again or press **Esc** to collapse the list and clear the selection. **↑** / **↓** select and expand commits; **Enter** toggles the expansion. The wheel scrolls freely through history and long file lists without changing the selection, and the scrollbar on the right shows your position.
+1. **Browse history.** The sidebar starts with no selected commit or highlighted row, as shown above. Scrolling does not select a commit.
+2. **Click a commit.** Its row is highlighted and changed-file statuses and paths appear directly below it. The graph stays visible. Click the same commit again or press **Esc** to collapse the list and clear the selection.
+3. **Click a file.** The sidebar shows only that file’s diff. Press **Esc** to return to the same expanded list and scroll position.
 
-Click a file to inspect its diff inside the sidebar, then press **Esc** to return to the same expanded list. **Tab** focuses the file list; **↑** / **↓** select a file and **Enter** opens its diff. Scroll diffs with the wheel or **↑** / **↓**, and pan horizontally with **h** / **l**.
+<table>
+  <tr>
+    <th width="50%">Click a commit → changed files</th>
+    <th width="50%">Click a file → file diff</th>
+  </tr>
+  <tr>
+    <td><a href="docs/preview-sidebar-files-dark.png"><img src="docs/preview-sidebar-files-dark.png" width="360" alt="Selected commit highlighted with its three changed files expanded below it"></a></td>
+    <td><a href="docs/preview-sidebar-diff-dark.png"><img src="docs/preview-sidebar-diff-dark.png" width="360" alt="Sidebar file diff showing removed and added lines in src/graph.rs"></a></td>
+  </tr>
+</table>
+
+*Current-renderer snapshots of the same sample repository, not live Herdr window captures. Light versions: [changed files](docs/preview-sidebar-files-light.png) · [file diff](docs/preview-sidebar-diff-light.png).*
+
+With the keyboard, **↑** / **↓** select and expand commits, and **Enter** toggles the list. Press **Tab** to focus files, select one with **↑** / **↓**, and press **Enter** to open its diff. The wheel scrolls history and long file lists without changing selection. In a diff, use the wheel or **↑** / **↓** to scroll, and **h** / **l** to pan horizontally.
 
 In the full view, select a branch and press **Enter** to filter its history; press **a** to show all branches again. Select a commit or **Uncommitted changes** to inspect its diff below.
 

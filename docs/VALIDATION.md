@@ -99,4 +99,6 @@
 - Linux에서의 실행 결과는 [GitHub Actions](https://github.com/sjlee06/herdr-git-graph/actions/workflows/ci.yml)에서 확인할 수 있습니다. 위 기록은 macOS 로컬 검증 기준입니다.
 - checkout·merge·rebase·push 등 쓰기 동작: 현재 구현 범위에 포함하지 않습니다.
 
-`preview.svg`는 실제 Ratatui 화면 버퍼에 같은 tiny-skia 그래프 렌더러를 합성한 **데모 스냅샷**입니다. 실행 중인 Herdr 창을 캡처한 이미지는 아닙니다. `preview-text.svg`는 문자 모드의 같은 화면입니다.
+`preview*.svg`와 PNG는 고정된 샘플 Git 저장소를 현재 Ratatui UI와 tiny-skia 그래프 렌더러로 생성한 **샘플 스냅샷**입니다. 기본 사이드바는 선택·강조 행이 없고, 커밋 선택 화면에는 변경 파일 목록, 파일 선택 화면에는 해당 파일의 diff가 표시됩니다. 파일 목록과 패치는 실제 Git worker 응답을 사용합니다. 실행 중인 Herdr 창을 캡처한 이미지는 아닙니다. `preview-text`는 같은 전체 화면의 문자 그래프 버전입니다.
+
+`preview-sidebar`는 원래 캡처한 Herdr 작업 공간 프레임에 현재 기본 사이드바를 합성한 이미지입니다. 편집기와 테스트 출력은 새로 캡처한 내용이 아닙니다. [이미지 생성 안내](DEVELOPMENT.md#preview-assets)에 전체 재생성 절차와 상태별 파일을 정리했습니다.

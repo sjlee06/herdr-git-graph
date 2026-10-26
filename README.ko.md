@@ -1,6 +1,6 @@
 # Herdr Git Graph
 
-**코드 옆에 Git 이력을 두고, 커밋을 펼쳐 변경 파일을 확인하세요.**
+**코드 옆에서 Git 이력을 보고, 파일별 변경 내용까지 확인하세요.**
 
 [![CI](https://github.com/sjlee06/herdr-git-graph/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sjlee06/herdr-git-graph/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -8,7 +8,7 @@
 
 [English](README.md) · 한국어
 
-Herdr용 조회 전용 Git 그래프 플러그인입니다. 사이드바에서 이력을 살펴보고 커밋 바로 아래에 변경 파일 목록을 펼칠 수 있습니다. 전체 화면에서는 브랜치 필터와 diff를 사용할 수 있습니다.
+Herdr용 조회 전용 Git 그래프 플러그인입니다. 사이드바에서 이력을 살펴보고, 커밋을 펼쳐 변경 파일 목록을 확인한 뒤 파일을 눌러 diff까지 볼 수 있습니다. 전체 화면에서는 브랜치 필터와 커밋 전체 diff를 사용할 수 있습니다.
 
 <table>
   <tr>
@@ -16,12 +16,12 @@ Herdr용 조회 전용 Git 그래프 플러그인입니다. 사이드바에서 �
     <th width="50%">밝은 테마 · Tomorrow</th>
   </tr>
   <tr>
-    <td><a href="docs/preview-sidebar-dark.png"><img src="docs/preview-sidebar-dark.png" width="360" alt="커밋 제목 위에 브랜치·태그 배지를 표시하는 어두운 사이드바"></a></td>
-    <td><a href="docs/preview-sidebar-light.png"><img src="docs/preview-sidebar-light.png" width="360" alt="동일한 데모 이력을 표시하는 Tomorrow 밝은 사이드바"></a></td>
+    <td><a href="docs/preview-sidebar-dark.png"><img src="docs/preview-sidebar-dark.png" width="360" alt="선택한 커밋이나 강조 행이 없는 기본 어두운 사이드바"></a></td>
+    <td><a href="docs/preview-sidebar-light.png"><img src="docs/preview-sidebar-light.png" width="360" alt="선택 없이 같은 샘플 이력을 표시하는 Tomorrow 밝은 사이드바"></a></td>
   </tr>
 </table>
 
-*같은 사이드바 데모를 어두운 테마와 밝은 테마로 비교했습니다. 이미지를 누르면 크게 볼 수 있습니다.*
+*선택한 커밋이나 강조 행이 없는 기본 상태입니다. 같은 샘플 저장소를 Classic과 Tomorrow 색상으로 렌더링했습니다. 이미지를 누르면 크게 볼 수 있습니다.*
 
 [Herdr 편집기 옆에 배치한 사이드바](docs/preview-sidebar.png)도 확인할 수 있습니다(데모 합성 이미지). 기본 `--theme auto`는 사용 중인 터미널 색상을 따릅니다.
 
@@ -76,7 +76,7 @@ herdr plugin action invoke herdr.git-graph.sidebar
   </tr>
 </table>
 
-*브랜치를 필터링하고 커밋 diff를 확인하는 전체 화면 데모입니다.*
+*같은 샘플 저장소의 전체 화면입니다. 커밋을 선택하고 상세 패널을 파일 diff 위치로 스크롤한 상태입니다.*
 
 브랜치 필터와 분할된 diff 상세 패널을 사용하려면 새 탭으로 전체 그래프를 엽니다.
 
@@ -106,9 +106,24 @@ description = "Open Git Graph in New Tab"
 
 ## 사용법
 
-기본적으로 사이드바는 커밋을 선택하지 않은 상태로 시작합니다. 커밋 노드나 행을 클릭하면 해당 커밋이 선택되고 바로 아래에 변경 파일의 상태와 경로가 펼쳐집니다. 그래프는 그대로 유지됩니다. 같은 커밋을 다시 클릭하거나 **Esc**를 누르면 목록이 접히고 선택이 해제됩니다. **↑** / **↓**는 커밋을 선택하며 목록을 펼치고, **Enter**는 목록을 펼치거나 접습니다. 휠은 선택을 바꾸지 않고 이력과 긴 파일 목록을 자유롭게 스크롤하며, 오른쪽 스크롤바로 현재 위치를 확인할 수 있습니다.
+1. **이력 살펴보기:** 위 이미지처럼 선택한 커밋이나 강조 행 없이 시작합니다. 스크롤해도 커밋이 선택되지 않습니다.
+2. **커밋 클릭:** 해당 행이 강조되고 바로 아래에 변경 파일의 상태와 경로가 펼쳐집니다. 그래프는 그대로 유지됩니다. 같은 커밋을 다시 클릭하거나 **Esc**를 누르면 목록이 접히고 선택이 해제됩니다.
+3. **파일 클릭:** 사이드바에서 해당 파일의 diff를 보여줍니다. **Esc**를 누르면 펼쳐둔 목록과 스크롤 위치로 돌아갑니다.
 
-파일을 클릭하면 사이드바 안에서 해당 파일의 diff가 열립니다. **Esc**를 누르면 펼쳐둔 목록으로 돌아갑니다. 키보드로는 **Tab**으로 파일 목록에 포커스를 옮긴 뒤 **↑** / **↓**로 파일을 선택하고 **Enter**로 diff를 엽니다. Diff는 휠이나 **↑** / **↓**로 스크롤하고 **h** / **l**로 가로 이동합니다.
+<table>
+  <tr>
+    <th width="50%">커밋 클릭 → 변경 파일</th>
+    <th width="50%">파일 클릭 → 파일 diff</th>
+  </tr>
+  <tr>
+    <td><a href="docs/preview-sidebar-files-dark.png"><img src="docs/preview-sidebar-files-dark.png" width="360" alt="선택한 커밋 행이 강조되고 아래에 변경 파일 세 개가 펼쳐진 사이드바"></a></td>
+    <td><a href="docs/preview-sidebar-diff-dark.png"><img src="docs/preview-sidebar-diff-dark.png" width="360" alt="src/graph.rs에서 삭제한 줄과 추가한 줄을 보여주는 사이드바 파일 diff"></a></td>
+  </tr>
+</table>
+
+*같은 샘플 저장소를 현재 렌더러로 생성한 스냅샷이며, 실행 중인 Herdr 창을 캡처한 이미지는 아닙니다. 밝은 테마: [변경 파일](docs/preview-sidebar-files-light.png) · [파일 diff](docs/preview-sidebar-diff-light.png).*
+
+키보드로는 **↑** / **↓**로 커밋을 선택하며 목록을 펼치고, **Enter**로 목록을 펼치거나 접습니다. **Tab**으로 파일 목록에 포커스를 옮긴 뒤 **↑** / **↓**로 파일을 선택하고 **Enter**로 diff를 엽니다. 휠은 선택을 바꾸지 않고 이력과 긴 파일 목록을 스크롤합니다. Diff는 휠이나 **↑** / **↓**로 스크롤하고 **h** / **l**로 가로 이동합니다.
 
 전체 화면에서 브랜치를 선택하고 **Enter**를 누르면 해당 이력만 표시하며, **a**를 누르면 전체 브랜치로 돌아갑니다. 커밋이나 **Uncommitted changes**를 선택하면 아래 상세 패널에서 diff를 확인할 수 있습니다.
 
