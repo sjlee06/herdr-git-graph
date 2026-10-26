@@ -21,7 +21,7 @@ Herdr용 조회 전용 Git 그래프 플러그인입니다. 사이드바에서 �
   </tr>
 </table>
 
-*선택한 커밋이나 강조 행이 없는 기본 상태입니다. 같은 샘플 저장소를 Classic과 Tomorrow 색상으로 렌더링했습니다. 이미지를 누르면 크게 볼 수 있습니다.*
+*선택한 커밋이나 강조 행이 없는 기본 상태입니다. 내장 데모 이력을 Classic과 Tomorrow 색상으로 렌더링했습니다. 이미지를 누르면 크게 볼 수 있습니다.*
 
 [Herdr 편집기 옆에 배치한 사이드바](docs/preview-sidebar.png)도 확인할 수 있습니다(데모 합성 이미지). 기본 `--theme auto`는 사용 중인 터미널 색상을 따릅니다.
 
@@ -76,7 +76,7 @@ herdr plugin action invoke herdr.git-graph.sidebar
   </tr>
 </table>
 
-*같은 샘플 저장소의 전체 화면입니다. 커밋을 선택하고 상세 패널을 파일 diff 위치로 스크롤한 상태입니다.*
+*같은 내장 데모 이력의 전체 화면입니다. 커밋을 선택하고 상세 패널을 파일 diff 위치로 스크롤한 상태입니다.*
 
 브랜치 필터와 분할된 diff 상세 패널을 사용하려면 새 탭으로 전체 그래프를 엽니다.
 
@@ -116,12 +116,12 @@ description = "Open Git Graph in New Tab"
     <th width="50%">파일 클릭 → 파일 diff</th>
   </tr>
   <tr>
-    <td><a href="docs/preview-sidebar-files-dark.png"><img src="docs/preview-sidebar-files-dark.png" width="360" alt="선택한 커밋 행이 강조되고 아래에 변경 파일 세 개가 펼쳐진 사이드바"></a></td>
-    <td><a href="docs/preview-sidebar-diff-dark.png"><img src="docs/preview-sidebar-diff-dark.png" width="360" alt="src/graph.rs에서 삭제한 줄과 추가한 줄을 보여주는 사이드바 파일 diff"></a></td>
+    <td><a href="docs/preview-sidebar-files-light.png"><img src="docs/preview-sidebar-files-light.png" width="360" alt="선택한 커밋 아래에 변경 파일 세 개가 펼쳐진 밝은 테마 사이드바"></a></td>
+    <td><a href="docs/preview-sidebar-diff-light.png"><img src="docs/preview-sidebar-diff-light.png" width="360" alt="src/graph.rs에서 삭제한 줄과 추가한 줄을 보여주는 밝은 테마 사이드바 파일 diff"></a></td>
   </tr>
 </table>
 
-*같은 샘플 저장소를 현재 렌더러로 생성한 스냅샷이며, 실행 중인 Herdr 창을 캡처한 이미지는 아닙니다. 밝은 테마: [변경 파일](docs/preview-sidebar-files-light.png) · [파일 diff](docs/preview-sidebar-diff-light.png).*
+*임시 샘플 Git 저장소의 실제 변경 파일 목록과 패치를 밝은 테마로 렌더링했습니다. 실행 중인 Herdr 창을 캡처한 이미지는 아닙니다. 어두운 테마: [변경 파일](docs/preview-sidebar-files-dark.png) · [파일 diff](docs/preview-sidebar-diff-dark.png).*
 
 키보드로는 **↑** / **↓**로 커밋을 선택하며 목록을 펼치고, **Enter**로 목록을 펼치거나 접습니다. **Tab**으로 파일 목록에 포커스를 옮긴 뒤 **↑** / **↓**로 파일을 선택하고 **Enter**로 diff를 엽니다. 휠은 선택을 바꾸지 않고 이력과 긴 파일 목록을 스크롤합니다. Diff는 휠이나 **↑** / **↓**로 스크롤하고 **h** / **l**로 가로 이동합니다.
 

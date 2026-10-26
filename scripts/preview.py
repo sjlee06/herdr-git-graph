@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refresh real-repository SVGs and 2x PNGs, preserving the Herdr workspace frame.
+"""Refresh demo and file-inspection SVGs and 2x PNGs, preserving the Herdr frame.
 
 Requires Git, Cargo, and resvg on PATH. Run from any working directory.
 """

@@ -1,4 +1,4 @@
-// Rebuild every documentation preview from a deterministic, real Git repository.
+// Rebuild overviews from built-in demo history and inspection views from a real sample repo.
 // Usage: cargo run --example previews -- [output-directory] (default: docs).
 use anyhow::{Context, Result, ensure};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -63,21 +63,15 @@ fn main() -> Result<()> {
         ("dark", Theme::new(ThemeMode::Classic)),
         ("light", tomorrow()),
     ] {
-        let mut full = App::new(repo.clone(), LIMIT, false);
+        // Keep the original built-in demo history in the overview images.
+        let mut full = App::new(git::demo(), LIMIT, true);
         full.theme = theme;
-        worker.sender.send(Request::Detail {
-            oid: full.selected_oid().context("selected commit")?.into(),
-            id: full.load_id,
-        })?;
-        let response = worker.receiver.recv_timeout(Duration::from_secs(20))?;
-        ensure!(matches!(&response, Response::Detail { result: Ok(_), .. }));
-        ensure!(full.apply(response));
         // The inspector is short: start at the graph patch, not the commit metadata.
         full.detail_scroll = full
             .detail
             .lines()
             .position(|line| line == "diff --git a/src/graph.rs b/src/graph.rs")
-            .context("graph patch in merge detail")?
+            .context("graph patch in demo detail")?
             + 1; // The UI prepends a refs row.
         full.focus = Focus::Details;
         ensure!(full.selected == Some(0) && full.show_details && !full.sidebar);
@@ -107,7 +101,7 @@ fn main() -> Result<()> {
             snapshot(&mut full, &output, "preview-text.svg", 140, 56, false)?;
         }
 
-        let mut sidebar = App::new(repo.clone(), LIMIT, false).with_sidebar(true);
+        let mut sidebar = App::new(git::demo(), LIMIT, true).with_sidebar(true);
         sidebar.theme = theme;
         ensure!(sidebar.selected.is_none() && sidebar.files.is_none() && !sidebar.show_details);
         snapshot(
@@ -122,6 +116,18 @@ fn main() -> Result<()> {
             snapshot(&mut sidebar, &output, "workspace-content.svg", 38, 39, true)?;
         }
 
+        // File-inspection examples use real worker responses, not demo patches.
+        let mut sidebar = App::new(repo.clone(), LIMIT, false).with_sidebar(true);
+        sidebar.theme = theme;
+        // Initialize the viewport before simulating input, as in the running app.
+        snapshot(
+            &mut sidebar,
+            &output,
+            "inspection-history.svg",
+            40,
+            26,
+            true,
+        )?;
         sidebar.key(
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
             Some(&worker),
@@ -163,6 +169,7 @@ fn main() -> Result<()> {
             26,
             true,
         )?;
+        ensure!(sidebar.top == 0 && sidebar.top_offset == 0);
 
         sidebar.open_file(graph_index);
         sidebar.request_detail(&worker);

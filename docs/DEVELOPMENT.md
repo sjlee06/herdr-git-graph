@@ -92,9 +92,9 @@ See [validation notes](VALIDATION.md) for recorded results and live terminal tes
 
 ## Preview assets
 
-The README images use a deterministic, temporary **sample Git repository**, not the project's working tree or hardcoded file lists and patches. `examples/previews.rs` loads real history through the application's Git worker, selects a commit, and opens its file diff. The current Ratatui UI and tiny-skia graph renderer render each state. These are headless UI snapshots, not captures of a live Herdr window.
+The overview images (default sidebar, full view, text graph, and workspace composite) keep the original built-in `git::demo()` history. Only the commit-to-file inspection examples use a deterministic, temporary **sample Git repository**, with real changed-file lists and patches loaded through the application's Git worker. `examples/previews.rs` renders both sources with the current Ratatui UI and tiny-skia graph renderer. These are headless UI snapshots, not captures of a live Herdr window.
 
-Both READMEs show the unselected sidebar in dark (Classic) and light (Tomorrow) colors, followed by the commit-to-file inspection flow. The asset set is:
+Both READMEs show the unselected sidebar in dark (Classic) and light (Tomorrow) colors, followed by the commit-to-file inspection flow in light colors. Dark inspection images remain available as links. The asset set is:
 
 | State | SVG / PNG basename | Cells | PNG size at 2× |
 | --- | --- | --- | --- |
@@ -114,7 +114,7 @@ Install [resvg](https://github.com/linebender/resvg), then regenerate **all** SV
 python3 scripts/preview.py
 ```
 
-The script compiles the shared example from current source, uses fixed sample contents, authors, dates, and Git settings, and asserts the unselected, expanded-file, and file-diff states before exporting them. It does not require rebuilding `bin/herdr-git-graph`. Do not use `--demo` exports to replace individual README assets: they use different sample history.
+The script compiles the shared example from current source, keeps built-in demo history for overviews, and uses fixed sample contents, authors, dates, and Git settings for inspection examples. It asserts the unselected, expanded-file, and file-diff states before exporting them. It does not require rebuilding `bin/herdr-git-graph`. Do not replace inspection examples with `--demo` exports: those use different history and hardcoded patches.
 
 To inspect just the SVGs without updating tracked assets or requiring resvg:
 

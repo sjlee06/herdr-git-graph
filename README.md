@@ -21,7 +21,7 @@ A read-only Git graph plugin for Herdr. Browse history, expand a commit’s chan
   </tr>
 </table>
 
-*The default sidebar has no selected commit or highlighted row. Both images render the same sample repository in Classic and Tomorrow colors. Click an image to enlarge it.*
+*The default sidebar has no selected commit or highlighted row. Both images render the built-in demo history in Classic and Tomorrow colors. Click an image to enlarge it.*
 
 [See the sidebar beside an editor in Herdr](docs/preview-sidebar.png) (demo composite). The default `--theme auto` follows your terminal's colors.
 
@@ -76,7 +76,7 @@ Drag the divider or use `prefix+r` to resize the sidebar. Use `prefix+l` to focu
   </tr>
 </table>
 
-*The same sample repository in the full view, with a commit selected and its inspector scrolled to a file patch.*
+*The same built-in demo history in the full view, with a commit selected and its inspector scrolled to a file patch.*
 
 Open the full graph in a new tab for branch filtering and a split-panel diff inspector:
 
@@ -116,12 +116,12 @@ Run `herdr config check`, then `herdr server reload-config`. Press your prefix f
     <th width="50%">Click a file → file diff</th>
   </tr>
   <tr>
-    <td><a href="docs/preview-sidebar-files-dark.png"><img src="docs/preview-sidebar-files-dark.png" width="360" alt="Selected commit highlighted with its three changed files expanded below it"></a></td>
-    <td><a href="docs/preview-sidebar-diff-dark.png"><img src="docs/preview-sidebar-diff-dark.png" width="360" alt="Sidebar file diff showing removed and added lines in src/graph.rs"></a></td>
+    <td><a href="docs/preview-sidebar-files-light.png"><img src="docs/preview-sidebar-files-light.png" width="360" alt="Light sidebar with a selected commit and its three changed files expanded below it"></a></td>
+    <td><a href="docs/preview-sidebar-diff-light.png"><img src="docs/preview-sidebar-diff-light.png" width="360" alt="Light sidebar file diff showing removed and added lines in src/graph.rs"></a></td>
   </tr>
 </table>
 
-*Current-renderer snapshots of the same sample repository, not live Herdr window captures. Light versions: [changed files](docs/preview-sidebar-files-light.png) · [file diff](docs/preview-sidebar-diff-light.png).*
+*Light-theme snapshots from a temporary sample Git repository, using real changed-file lists and patches. These are not live Herdr window captures. Dark versions: [changed files](docs/preview-sidebar-files-dark.png) · [file diff](docs/preview-sidebar-diff-dark.png).*
 
 With the keyboard, **↑** / **↓** select and expand commits, and **Enter** toggles the list. Press **Tab** to focus files, select one with **↑** / **↓**, and press **Enter** to open its diff. The wheel scrolls history and long file lists without changing selection. In a diff, use the wheel or **↑** / **↓** to scroll, and **h** / **l** to pan horizontally.
 
