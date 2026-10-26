@@ -116,12 +116,12 @@ description = "Open Git Graph in New Tab"
     <th width="50%">파일 클릭 → 파일 diff</th>
   </tr>
   <tr>
-    <td><a href="docs/preview-sidebar-files-light.png"><img src="docs/preview-sidebar-files-light.png" width="360" alt="선택한 커밋 아래에 변경 파일 세 개가 펼쳐진 밝은 테마 사이드바"></a></td>
+    <td><a href="docs/preview-sidebar-files-light.png"><img src="docs/preview-sidebar-files-light.png" width="360" alt="선택한 데모 커밋 아래에 추가·수정·삭제 파일이 펼쳐진 밝은 테마 사이드바"></a></td>
     <td><a href="docs/preview-sidebar-diff-light.png"><img src="docs/preview-sidebar-diff-light.png" width="360" alt="src/graph.rs에서 삭제한 줄과 추가한 줄을 보여주는 밝은 테마 사이드바 파일 diff"></a></td>
   </tr>
 </table>
 
-*임시 샘플 Git 저장소의 실제 변경 파일 목록과 패치를 밝은 테마로 렌더링했습니다. 실행 중인 Herdr 창을 캡처한 이미지는 아닙니다. 어두운 테마: [변경 파일](docs/preview-sidebar-files-dark.png) · [파일 diff](docs/preview-sidebar-diff-dark.png).*
+*위 이미지와 같은 내장 데모 이력과 패치를 밝은 테마로 렌더링했습니다. 실행 중인 Herdr 창을 캡처한 이미지는 아닙니다. 어두운 테마: [변경 파일](docs/preview-sidebar-files-dark.png) · [파일 diff](docs/preview-sidebar-diff-dark.png).*
 
 키보드로는 **↑** / **↓**로 커밋을 선택하며 목록을 펼치고, **Enter**로 목록을 펼치거나 접습니다. **Tab**으로 파일 목록에 포커스를 옮긴 뒤 **↑** / **↓**로 파일을 선택하고 **Enter**로 diff를 엽니다. 휠은 선택을 바꾸지 않고 이력과 긴 파일 목록을 스크롤합니다. Diff는 휠이나 **↑** / **↓**로 스크롤하고 **h** / **l**로 가로 이동합니다.
 

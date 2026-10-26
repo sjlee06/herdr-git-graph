@@ -99,6 +99,6 @@
 - Linux에서의 실행 결과는 [GitHub Actions](https://github.com/sjlee06/herdr-git-graph/actions/workflows/ci.yml)에서 확인할 수 있습니다. 위 기록은 macOS 로컬 검증 기준입니다.
 - checkout·merge·rebase·push 등 쓰기 동작: 현재 구현 범위에 포함하지 않습니다.
 
-`preview*.svg`와 PNG는 현재 Ratatui UI와 tiny-skia 그래프 렌더러로 생성한 **샘플 스냅샷**입니다. 기본 사이드바와 전체 화면은 기존 내장 데모 이력을 유지하며, 커밋·파일 클릭 예시만 고정된 임시 Git 저장소의 실제 파일 목록과 패치를 Git worker로 불러옵니다. 기본 사이드바는 선택·강조 행이 없고, 커밋 선택 화면에는 변경 파일 목록, 파일 선택 화면에는 해당 파일의 diff가 표시됩니다. 실행 중인 Herdr 창을 캡처한 이미지는 아닙니다. `preview-text`는 같은 내장 데모 전체 화면의 문자 그래프 버전입니다.
+`preview*.svg`와 PNG는 현재 Ratatui UI와 tiny-skia 그래프 렌더러로 생성한 **샘플 스냅샷**입니다. 기본 사이드바·전체 화면·커밋 및 파일 클릭 예시 모두 같은 내장 데모 이력과 파일 목록, 패치를 사용합니다. 클릭 예시는 앱의 마우스 처리 경로로 첫 데모 커밋과 `src/graph.rs`를 차례로 선택합니다. 기본 사이드바는 선택·강조 행이 없고, 커밋 선택 화면에는 추가(`A`)·수정(`M`)·삭제(`D`) 파일 세 개가 표시되며, 파일 선택 화면에는 해당 파일의 diff만 표시됩니다. 실행 중인 Herdr 창을 캡처한 이미지는 아닙니다. `preview-text`는 같은 내장 데모 전체 화면의 문자 그래프 버전입니다.
 
 `preview-sidebar`는 원래 캡처한 Herdr 작업 공간 프레임에 현재 기본 사이드바를 합성한 이미지입니다. 편집기와 테스트 출력은 새로 캡처한 내용이 아닙니다. [이미지 생성 안내](DEVELOPMENT.md#preview-assets)에 전체 재생성 절차와 상태별 파일을 정리했습니다.

@@ -466,18 +466,17 @@ impl App {
             if oid == git::WORKTREE_OID {
                 Some(Ok(self.repo.worktree.files.clone()))
             } else if self.demo {
-                Some(Ok(vec![git::ChangedFile {
-                    status: "M".into(),
-                    path: "src/graph.rs".into(),
-                    original_path: None,
-                }]))
+                Some(Ok(git::demo_changed_files()))
             } else {
                 self.file_cache.get(oid).cloned().map(Ok)
             }
         });
         self.detail_due = Instant::now() + Duration::from_millis(100);
         self.detail = if self.demo {
-            self.selected.and_then(|index| self.repo.commits.get(index)).map(|c| format!("commit {}\nAuthor: {}\nDate:   {}\n\n    {}\n\n src/graph.rs | 8 ++++++--\n 1 file changed, 6 insertions(+), 2 deletions(-)\n\ndiff --git a/src/graph.rs b/src/graph.rs\n--- a/src/graph.rs\n+++ b/src/graph.rs\n@@ -12,3 +12,7 @@\n-    draw_ascii_edge(from, to);\n+    let curve = BranchCurve::new(from, to);\n+    renderer.stroke(curve, color);\n+    renderer.draw_node(commit.position());\n\n[Demo data · no repository changes]",c.oid,c.author,c.date,c.subject)).unwrap_or_default()
+            self.selected
+                .and_then(|index| self.repo.commits.get(index))
+                .map(git::demo_details)
+                .unwrap_or_default()
         } else if let Some(oid) = self.selected_oid() {
             self.cache
                 .get(oid)
@@ -499,6 +498,11 @@ impl App {
             return;
         };
         self.file_selected = Some(index);
+        self.detail = if self.demo {
+            git::demo_file_details(&file.path)
+        } else {
+            "Loading file…".into()
+        };
         self.file_diff = Some(file);
         self.focus = Focus::Details;
         self.show_details = true;
@@ -507,9 +511,6 @@ impl App {
         self.file_request_id += 1;
         self.requested_file = false;
         self.detail_due = Instant::now();
-        if !self.demo {
-            self.detail = "Loading file…".into();
-        }
     }
 
     fn close_file(&mut self) {
@@ -1508,7 +1509,7 @@ mod tests {
         assert!(!app.show_details);
         assert_eq!(
             app.files.as_ref().unwrap().as_ref().unwrap()[0].path,
-            "src/graph.rs"
+            "src/curves.rs"
         );
         app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), None);
         assert_eq!(app.selected, None);
@@ -1517,6 +1518,55 @@ mod tests {
         app.key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE), None);
         assert_eq!(app.selected, Some(0));
         assert_eq!(app.top, 0);
+    }
+
+    #[test]
+    fn demo_files_show_added_modified_deleted_and_open_only_the_selected_patch() {
+        let mut app = App::new(git::demo(), 2000, true).with_sidebar(true);
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), None);
+        let files = app.files.as_ref().unwrap().as_ref().unwrap().clone();
+        assert_eq!(
+            files
+                .iter()
+                .map(|file| (file.status.as_str(), file.path.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("A", "src/curves.rs"),
+                ("M", "src/graph.rs"),
+                ("D", "src/legacy_graph.rs"),
+            ]
+        );
+        let commit_detail = app.detail.clone();
+        for (index, file) in files.iter().enumerate() {
+            app.open_file(index);
+            assert_eq!(app.file_diff.as_ref(), Some(file));
+            assert_eq!(app.focus, Focus::Details);
+            assert!(app.show_details);
+            assert!(
+                app.detail
+                    .contains(&format!("diff --git a/{0} b/{0}", file.path))
+            );
+            for other in files.iter().filter(|other| other.path != file.path) {
+                assert!(!app.detail.contains(&other.path));
+            }
+            match file.status.as_str() {
+                "A" => assert!(app.detail.contains("new file mode 100644\n--- /dev/null")),
+                "M" => assert!(
+                    app.detail.contains("-    draw_ascii_edge")
+                        && app.detail.contains("+    let curve")
+                ),
+                "D" => assert!(
+                    app.detail.contains("deleted file mode 100644")
+                        && app.detail.contains("+++ /dev/null")
+                ),
+                _ => unreachable!(),
+            }
+            assert!(commit_detail.contains(app.detail.split("\n[Demo data").next().unwrap()));
+            app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), None);
+            assert!(app.file_diff.is_none());
+            assert_eq!(app.selected, Some(0));
+            assert_eq!(app.files.as_ref().unwrap().as_ref().unwrap(), &files);
+        }
     }
 
     #[test]

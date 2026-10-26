@@ -92,7 +92,7 @@ See [validation notes](VALIDATION.md) for recorded results and live terminal tes
 
 ## Preview assets
 
-The overview images (default sidebar, full view, text graph, and workspace composite) keep the original built-in `git::demo()` history. Only the commit-to-file inspection examples use a deterministic, temporary **sample Git repository**, with real changed-file lists and patches loaded through the application's Git worker. `examples/previews.rs` renders both sources with the current Ratatui UI and tiny-skia graph renderer. These are headless UI snapshots, not captures of a live Herdr window.
+All README images use the same built-in `git::demo()` history, changed-file list, and patch. `examples/previews.rs` renders them with the current Ratatui UI and tiny-skia graph renderer. The inspection examples click the first demo commit, then its `src/graph.rs` row through the application’s mouse handler. The commit includes added `src/curves.rs`, modified `src/graph.rs`, and deleted `src/legacy_graph.rs`; each file opens only its own demo patch. These are headless UI snapshots, not captures of a live Herdr window.
 
 Both READMEs show the unselected sidebar in dark (Classic) and light (Tomorrow) colors, followed by the commit-to-file inspection flow in light colors. Dark inspection images remain available as links. The asset set is:
 
@@ -110,11 +110,11 @@ All files are under `docs/`. The light images use Ghostty's Tomorrow foreground 
 Install [resvg](https://github.com/linebender/resvg), then regenerate **all** SVGs and 2× PNGs together:
 
 ```bash
-# Requires Git, Cargo, and resvg on PATH.
+# Requires Cargo and resvg on PATH.
 python3 scripts/preview.py
 ```
 
-The script compiles the shared example from current source, keeps built-in demo history for overviews, and uses fixed sample contents, authors, dates, and Git settings for inspection examples. It asserts the unselected, expanded-file, and file-diff states before exporting them. It does not require rebuilding `bin/herdr-git-graph`. Do not replace inspection examples with `--demo` exports: those use different history and hardcoded patches.
+The script compiles the shared example from current source and uses built-in demo data for every state. It asserts the unselected, expanded-file, and file-diff states, and checks that the full view and sidebar use the same selected commit and patch. It does not create a sample Git repository or require rebuilding `bin/herdr-git-graph`.
 
 To inspect just the SVGs without updating tracked assets or requiring resvg:
 
@@ -126,7 +126,7 @@ cargo run --locked --example previews -- /tmp/herdr-git-graph-previews
 
 The linked `docs/preview-sidebar.png` remains a **demo composite**. Its workspace frame, editor, and test output come from the original isolated Herdr capture; only the graph content is regenerated. The script replaces the 38×39-cell graph with the current unselected sidebar, mapping its 9×20-pixel cells to the frame's 10×20-pixel cells. Keep `docs/preview-sidebar.svg` as the input frame. Repeated generation replaces the nested graph rather than stacking copies.
 
-After regeneration, check that default sidebars have no selection highlight, expanded sidebars show all three sample paths, and file diffs show only `src/graph.rs` with removed and added lines. Verify dark/light colors, graph alignment, image links, and README layout at desktop and narrow widths. Re-running the generator should leave every asset byte-identical.
+After regeneration, check that default sidebars have no selection highlight, expanded sidebars show all three demo statuses (`A`, `M`, `D`) and paths, and file diffs show only `src/graph.rs` with removed and added lines. Verify dark/light colors, graph alignment, image links, and README layout at desktop and narrow widths. Re-running the generator should leave every asset byte-identical.
 
 ## Source layout
 

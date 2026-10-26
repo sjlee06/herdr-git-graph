@@ -905,6 +905,51 @@ fn display_path(path: &str) -> String {
     }
 }
 
+const DEMO_FILES: [(&str, &str, &str); 3] = [
+    (
+        "A",
+        "src/curves.rs",
+        "diff --git a/src/curves.rs b/src/curves.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/curves.rs\n@@ -0,0 +1,3 @@\n+pub fn stroke(from: Point, to: Point) {\n+    draw_bezier(from, to);\n+}\n",
+    ),
+    (
+        "M",
+        "src/graph.rs",
+        "diff --git a/src/graph.rs b/src/graph.rs\n--- a/src/graph.rs\n+++ b/src/graph.rs\n@@ -12 +12,3 @@\n-    draw_ascii_edge(from, to);\n+    let curve = BranchCurve::new(from, to);\n+    renderer.stroke(curve, color);\n+    renderer.draw_node(commit.position());\n",
+    ),
+    (
+        "D",
+        "src/legacy_graph.rs",
+        "diff --git a/src/legacy_graph.rs b/src/legacy_graph.rs\ndeleted file mode 100644\n--- a/src/legacy_graph.rs\n+++ /dev/null\n@@ -1,3 +0,0 @@\n-pub fn draw_ascii_edge(from: Point, to: Point) {\n-    draw_line(from, to);\n-}\n",
+    ),
+];
+
+pub fn demo_changed_files() -> Vec<ChangedFile> {
+    DEMO_FILES
+        .iter()
+        .map(|(status, path, _)| ChangedFile {
+            status: (*status).into(),
+            path: (*path).into(),
+            original_path: None,
+        })
+        .collect()
+}
+
+pub fn demo_details(commit: &Commit) -> String {
+    let patches = DEMO_FILES.map(|(_, _, patch)| patch).join("\n");
+    format!(
+        "commit {}\nAuthor: {}\nDate:   {}\n\n    {}\n\n src/curves.rs       | 3 +++\n src/graph.rs        | 4 +++-\n src/legacy_graph.rs | 3 ---\n 3 files changed, 6 insertions(+), 4 deletions(-)\n\n{patches}\n[Demo data · no repository changes]",
+        commit.oid, commit.author, commit.date, commit.subject,
+    )
+}
+
+pub fn demo_file_details(path: &str) -> String {
+    let (_, _, patch) = DEMO_FILES
+        .iter()
+        .find(|(_, name, _)| *name == path)
+        .expect("selected file belongs to the demo");
+    format!("{patch}\n[Demo data · no repository changes]")
+}
+
 pub fn demo() -> Repository {
     let data = [
         (

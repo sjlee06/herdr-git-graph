@@ -1561,7 +1561,7 @@ mod tests {
                 assert!(changes.contains("GIT GRAPH"));
                 assert!(!changes.contains(['▸', '▾']));
                 assert!(!changes.contains("COMMIT INSPECTOR"));
-                assert!(changes.contains("graph.rs"), "{width}x{height}: {changes}");
+                assert!(changes.contains("urves.rs"), "{width}x{height}: {changes}");
                 assert_eq!(app.detail_area, Rect::default());
                 assert!(!app.show_details);
                 assert_eq!(app.selected, Some(top));
@@ -1575,13 +1575,13 @@ mod tests {
                 assert!(!app.detail_area.is_empty());
                 app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), None);
                 let files = screen(&mut app, width, height).join("\n");
-                assert!(files.contains("graph.rs"));
+                assert!(files.contains("urves.rs"));
                 assert!(!files.contains("FILE DIFF"));
                 assert_eq!(app.selected, Some(top));
                 app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), None);
                 let graph = screen(&mut app, width, height).join("\n");
                 assert!(graph.contains("GIT GRAPH"));
-                assert!(!graph.contains("graph.rs"));
+                assert!(!graph.contains("curves.rs"));
                 assert_eq!(app.selected, None);
                 assert_eq!(app.top, top);
                 screen(&mut app, 20, 8);
@@ -1638,7 +1638,7 @@ mod tests {
     #[test]
     fn keyboard_file_navigation_keeps_long_lists_visible_and_diff_scrolls() {
         for width in [24, 40, 96] {
-            let mut app = App::new(crate::git::demo(), 2000, true).with_sidebar(true);
+            let mut app = App::new(crate::git::demo(), 2000, false).with_sidebar(true);
             app.selected = Some(0);
             app.selection_changed();
             app.files = Some(Ok((0..40)

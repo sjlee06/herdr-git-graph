@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Refresh demo and file-inspection SVGs and 2x PNGs, preserving the Herdr frame.
+"""Refresh built-in demo SVGs and 2x PNGs, preserving the Herdr workspace frame.
 
-Requires Git, Cargo, and resvg on PATH. Run from any working directory.
+Requires Cargo and resvg on PATH. Run from any working directory.
 """
 from pathlib import Path
 import shutil

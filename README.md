@@ -116,12 +116,12 @@ Run `herdr config check`, then `herdr server reload-config`. Press your prefix f
     <th width="50%">Click a file → file diff</th>
   </tr>
   <tr>
-    <td><a href="docs/preview-sidebar-files-light.png"><img src="docs/preview-sidebar-files-light.png" width="360" alt="Light sidebar with a selected commit and its three changed files expanded below it"></a></td>
+    <td><a href="docs/preview-sidebar-files-light.png"><img src="docs/preview-sidebar-files-light.png" width="360" alt="Light sidebar with added, modified, and deleted files expanded below the demo commit"></a></td>
     <td><a href="docs/preview-sidebar-diff-light.png"><img src="docs/preview-sidebar-diff-light.png" width="360" alt="Light sidebar file diff showing removed and added lines in src/graph.rs"></a></td>
   </tr>
 </table>
 
-*Light-theme snapshots from a temporary sample Git repository, using real changed-file lists and patches. These are not live Herdr window captures. Dark versions: [changed files](docs/preview-sidebar-files-dark.png) · [file diff](docs/preview-sidebar-diff-dark.png).*
+*Light-theme snapshots of the same built-in demo history and patch shown above. These are not live Herdr window captures. Dark versions: [changed files](docs/preview-sidebar-files-dark.png) · [file diff](docs/preview-sidebar-diff-dark.png).*
 
 With the keyboard, **↑** / **↓** select and expand commits, and **Enter** toggles the list. Press **Tab** to focus files, select one with **↑** / **↓**, and press **Enter** to open its diff. The wheel scrolls history and long file lists without changing selection. In a diff, use the wheel or **↑** / **↓** to scroll, and **h** / **l** to pan horizontally.
 
