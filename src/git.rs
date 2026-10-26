@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use std::{
-    io::Read,
-    path::{Path, PathBuf},
+    io::{BufRead, BufReader, Read},
+    path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -85,8 +85,35 @@ impl Repository {
 
 // Subprocesses are bounded and never invoke a shell, a pager, or external diff tools.
 fn run(path: &Path, args: &[&str], limit: usize) -> Result<String> {
-    let mut child = Command::new("git")
-        .args(["--no-pager", "--no-optional-locks", "-c", "color.ui=false"])
+    run_with_paths(path, args, limit, false)
+}
+
+fn run_with_paths(path: &Path, args: &[&str], limit: usize, literal: bool) -> Result<String> {
+    run_filtered(path, args, limit, literal, None)
+}
+
+fn run_filtered(
+    path: &Path,
+    args: &[&str],
+    limit: usize,
+    literal: bool,
+    selected: Option<ChangedFile>,
+) -> Result<String> {
+    let mut command = Command::new("git");
+    command.args(["--no-pager", "--no-optional-locks", "-c", "color.ui=false"]);
+    if literal {
+        // Override inherited pathspec modes as well as disabling magic and globbing.
+        command
+            .arg("--literal-pathspecs")
+            .env_remove("GIT_LITERAL_PATHSPECS")
+            .env_remove("GIT_GLOB_PATHSPECS")
+            .env_remove("GIT_NOGLOB_PATHSPECS")
+            .env_remove("GIT_ICASE_PATHSPECS");
+    }
+    if selected.is_some() {
+        command.args(["-c", "core.quotePath=true"]);
+    }
+    let mut child = command
         .arg("-C")
         .arg(path)
         .args(args)
@@ -99,6 +126,9 @@ fn run(path: &Path, args: &[&str], limit: usize) -> Result<String> {
     let stdout = child.stdout.take().context("Git stdout unavailable")?;
     let stderr = child.stderr.take().context("Git stderr unavailable")?;
     let out = thread::spawn(move || {
+        if let Some(file) = selected {
+            return read_selected_patch(stdout, limit, &file);
+        }
         let mut bytes = Vec::new();
         stdout
             .take(limit as u64 + 1)
@@ -443,6 +473,388 @@ pub fn details(root: &Path, oid: &str) -> Result<String> {
         ],
         512 * 1024,
     )
+}
+
+const FILE_PREVIEW_LIMIT: usize = 512 * 1024;
+const PREVIEW_TRUNCATED: &str = "\n\n[Diff preview truncated at 512 KiB]";
+
+/// Preview only the selected path (and its rename source), without modifying the index.
+/// Commit patches use the first parent; untracked contents are read in a bounded preview.
+pub fn file_details(root: &Path, oid: &str, file: &ChangedFile) -> Result<String> {
+    let mut paths = vec![file.path.as_str()];
+    if let Some(original) = file.original_path.as_deref() {
+        paths.push(original);
+    }
+    for path in &paths {
+        validate_file_path(path)?;
+    }
+    if oid == WORKTREE_OID {
+        // Do not follow symlinked parent directories, even for stale status records.
+        let root = root.canonicalize().context("Git root unavailable")?;
+        for path in &paths {
+            validate_worktree_path(&root, path)?;
+        }
+        if file.status == "??" {
+            return untracked_file_details(&root, &file.path);
+        }
+        let mut text = String::new();
+        for (title, cached) in [("Staged changes", true), ("Unstaged changes", false)] {
+            let mut args = vec![
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--no-relative",
+                "--find-renames",
+                "--ignore-submodules=none",
+                "--submodule=short",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+                "--line-prefix=",
+                "--patch",
+            ];
+            if cached {
+                args.push("--cached");
+            }
+            args.push("--");
+            args.extend(paths.iter().copied());
+            let patch = run_filtered(&root, &args, FILE_PREVIEW_LIMIT, true, Some(file.clone()))?;
+            text.push_str(&format!(
+                "{title}\n{}\n",
+                if patch.is_empty() { "(none)\n" } else { &patch }
+            ));
+        }
+        return Ok(bound_file_preview(text));
+    }
+    if oid.is_empty() || !oid.bytes().all(|b| b.is_ascii_hexdigit()) {
+        bail!("Invalid commit id");
+    }
+    // A hexadecimal blob/tree id must not make `show` print non-patch contents.
+    let revision = format!("{oid}^{{commit}}");
+    let commit = run(root, &["rev-parse", "--verify", &revision], 65536)?;
+    let mut args = vec![
+        "show",
+        "--format=",
+        "--no-notes",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--no-relative",
+        "--find-renames",
+        "--ignore-submodules=none",
+        "--submodule=short",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        "--line-prefix=",
+        "--patch",
+        "--diff-merges=first-parent",
+        commit.trim(),
+        "--",
+    ];
+    args.extend(paths);
+    run_filtered(root, &args, FILE_PREVIEW_LIMIT, true, Some(file.clone())).map(bound_file_preview)
+}
+
+// Literal pathspecs still select descendants and independent changes at a rename
+// source. Filter complete patch records by exact endpoints, before counting bytes.
+// Rename/copy metadata is authoritative: a diff header alone can be ambiguous when
+// unquoted filenames contain spaces (including " b/").
+fn read_selected_patch(
+    reader: impl Read,
+    limit: usize,
+    file: &ChangedFile,
+) -> std::io::Result<Vec<u8>> {
+    #[derive(Default)]
+    struct Record {
+        pending: Vec<u8>,
+        metadata: bool,
+        ordinary: bool,
+        renamed: bool,
+        source: bool,
+        destination: bool,
+        selected: bool,
+    }
+    impl Record {
+        fn finish_metadata(&mut self, output: &mut Vec<u8>, limit: usize) {
+            if self.metadata {
+                self.selected = if self.renamed {
+                    self.source && self.destination
+                } else {
+                    self.ordinary
+                };
+                if self.selected {
+                    append_bounded(output, &self.pending, limit);
+                }
+                self.pending.clear();
+                self.metadata = false;
+            }
+        }
+    }
+    fn append_bounded(output: &mut Vec<u8>, bytes: &[u8], limit: usize) {
+        let count = bytes.len().min((limit + 1).saturating_sub(output.len()));
+        output.extend_from_slice(&bytes[..count]);
+    }
+
+    let path = quote_patch_path(&file.path);
+    let source = file.original_path.as_deref().map(quote_patch_path);
+    let ordinary = format!(
+        "diff --git {} {}\n",
+        quote_patch_path(&format!("a/{}", file.path)),
+        quote_patch_path(&format!("b/{}", file.path))
+    );
+    let combined = format!("diff --cc {path}\n");
+    let combined_long = format!("diff --combined {path}\n");
+    // Bound each read even for a single enormous content line. An expected metadata
+    // line fits in the first chunk, so partial unselected lines cannot match it.
+    let chunk_limit = ordinary.len().max(source.as_ref().map_or(0, String::len)) + 128;
+    let mut reader = BufReader::new(reader);
+    let mut output = Vec::new();
+    let mut record = Record::default();
+    let mut beginning = true;
+    loop {
+        let mut chunk = Vec::new();
+        if Read::by_ref(&mut reader)
+            .take(chunk_limit as u64)
+            .read_until(b'\n', &mut chunk)?
+            == 0
+        {
+            record.finish_metadata(&mut output, limit);
+            return Ok(output);
+        }
+        if beginning {
+            if chunk.starts_with(b"diff --git ")
+                || chunk.starts_with(b"diff --cc ")
+                || chunk.starts_with(b"diff --combined ")
+            {
+                record.finish_metadata(&mut output, limit);
+                record = Record {
+                    metadata: true,
+                    ordinary: chunk == ordinary.as_bytes()
+                        || chunk == combined.as_bytes()
+                        || chunk == combined_long.as_bytes(),
+                    ..Record::default()
+                };
+            } else if record.metadata {
+                let line = chunk.strip_suffix(b"\n").unwrap_or(&chunk);
+                if let Some(from) = line
+                    .strip_prefix(b"rename from ")
+                    .or_else(|| line.strip_prefix(b"copy from "))
+                {
+                    record.renamed = true;
+                    record.source = source.as_ref().is_none_or(|path| from == path.as_bytes());
+                }
+                if let Some(to) = line
+                    .strip_prefix(b"rename to ")
+                    .or_else(|| line.strip_prefix(b"copy to "))
+                {
+                    record.renamed = true;
+                    record.destination = to == path.as_bytes();
+                }
+                if line.starts_with(b"--- ")
+                    || line.starts_with(b"@@")
+                    || line.starts_with(b"Binary files ")
+                    || line == b"GIT binary patch"
+                {
+                    record.finish_metadata(&mut output, limit);
+                }
+            }
+        }
+        if record.metadata {
+            append_bounded(&mut record.pending, &chunk, limit);
+        } else if record.selected {
+            append_bounded(&mut output, &chunk, limit);
+        }
+        if output.len() > limit {
+            return Ok(output);
+        }
+        beginning = chunk.ends_with(b"\n");
+    }
+}
+
+// Match Git's C-style patch-path quoting with core.quotePath=true. Spaces remain
+// unquoted; rename/copy endpoint lines disambiguate those headers above.
+fn quote_patch_path(path: &str) -> String {
+    let mut quoted = String::new();
+    let mut needs_quotes = false;
+    for byte in path.bytes() {
+        let escape = match byte {
+            b'\x07' => Some("\\a"),
+            b'\x08' => Some("\\b"),
+            b'\t' => Some("\\t"),
+            b'\n' => Some("\\n"),
+            b'\x0b' => Some("\\v"),
+            b'\x0c' => Some("\\f"),
+            b'\r' => Some("\\r"),
+            b'"' => Some("\\\""),
+            b'\\' => Some("\\\\"),
+            _ => None,
+        };
+        if let Some(escape) = escape {
+            quoted.push_str(escape);
+            needs_quotes = true;
+        } else if !(0x20..0x7f).contains(&byte) {
+            quoted.push_str(&format!("\\{byte:03o}"));
+            needs_quotes = true;
+        } else {
+            quoted.push(byte as char);
+        }
+    }
+    if needs_quotes {
+        format!("\"{quoted}\"")
+    } else {
+        quoted
+    }
+}
+
+fn validate_file_path(path: &str) -> Result<()> {
+    if path.is_empty()
+        || path.contains('\0')
+        || Path::new(path)
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        bail!("Invalid repository-relative file path");
+    }
+    Ok(())
+}
+
+fn validate_worktree_path(root: &Path, path: &str) -> Result<()> {
+    let mut full = root.to_path_buf();
+    let mut components = Path::new(path).components().peekable();
+    while let Some(component) = components.next() {
+        full.push(component);
+        match std::fs::symlink_metadata(&full) {
+            Ok(metadata) if components.peek().is_some() => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    bail!("File path has a non-directory or symbolic-link parent");
+                }
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(error).context("Cannot inspect file path"),
+        }
+    }
+    Ok(())
+}
+
+fn untracked_file_details(root: &Path, path: &str) -> Result<String> {
+    let mut text = format!("Untracked file contents: {}\n\n", display_path(path));
+    text.push_str(&read_untracked_contents(root, path)?);
+    Ok(bound_file_preview(text))
+}
+
+#[cfg(unix)]
+fn read_untracked_contents(root: &Path, path: &str) -> Result<String> {
+    use std::{
+        ffi::CString,
+        fs::{File, OpenOptions},
+        os::{
+            fd::{AsRawFd, FromRawFd},
+            unix::{ffi::OsStrExt, fs::OpenOptionsExt},
+        },
+    };
+
+    fn open_at(parent: &File, name: &CString, flags: libc::c_int) -> Result<File> {
+        // SAFETY: parent owns a live descriptor and name is NUL-terminated. A successful
+        // openat returns a new descriptor owned exclusively by the returned File.
+        let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error()).context("Cannot open untracked path");
+        }
+        Ok(unsafe { File::from_raw_fd(fd) })
+    }
+
+    let flags = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK;
+    let mut parent = OpenOptions::new()
+        .read(true)
+        .custom_flags(flags | libc::O_DIRECTORY)
+        .open(root)
+        .context("Cannot open repository root")?;
+    let mut components = Path::new(path).components().peekable();
+    while let Some(component) = components.next() {
+        let name = CString::new(component.as_os_str().as_bytes())?;
+        if components.peek().is_some() {
+            // Each directory stays anchored by its descriptor, even if renamed while
+            // previewing. Neither intermediate nor final symlinks can be followed.
+            parent = open_at(&parent, &name, flags | libc::O_DIRECTORY)?;
+            continue;
+        }
+        let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: metadata is writable, and fstatat initializes it on success.
+        if unsafe {
+            libc::fstatat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                metadata.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        } < 0
+        {
+            return Err(std::io::Error::last_os_error()).context("Cannot inspect untracked file");
+        }
+        let kind = unsafe { metadata.assume_init() }.st_mode & libc::S_IFMT;
+        if kind == libc::S_IFLNK {
+            let mut bytes = vec![0; FILE_PREVIEW_LIMIT + 1];
+            // readlinkat reads the link itself relative to the pinned parent, not its
+            // target. Replacement by a non-symlink simply fails without reading it.
+            let count = unsafe {
+                libc::readlinkat(
+                    parent.as_raw_fd(),
+                    name.as_ptr(),
+                    bytes.as_mut_ptr().cast(),
+                    bytes.len(),
+                )
+            };
+            if count < 0 {
+                return Err(std::io::Error::last_os_error()).context("Cannot read symbolic link");
+            }
+            bytes.truncate(count as usize);
+            return Ok(format!(
+                "Symbolic link (target only; not followed): {}\n",
+                display_path(&String::from_utf8_lossy(&bytes))
+            ));
+        }
+        if kind == libc::S_IFDIR {
+            return Ok("Directory contents are not previewed.\n".into());
+        }
+        if kind != libc::S_IFREG {
+            return Ok("Special file contents are not previewed.\n".into());
+        }
+        // The entry may have changed after fstatat. NOFOLLOW rejects replacement
+        // links, NONBLOCK prevents a replacement FIFO from blocking, and metadata
+        // from the opened descriptor must confirm a regular file before any read.
+        let opened = open_at(&parent, &name, flags)?;
+        if !opened.metadata()?.is_file() {
+            return Ok("Non-regular file contents are not previewed.\n".into());
+        }
+        let mut bytes = Vec::new();
+        opened
+            .take(FILE_PREVIEW_LIMIT as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        return Ok(if bytes[..bytes.len().min(8192)].contains(&0) {
+            "Binary file contents are not previewed.\n".into()
+        } else {
+            String::from_utf8_lossy(&bytes).into_owned()
+        });
+    }
+    bail!("Invalid repository-relative file path")
+}
+
+#[cfg(not(unix))]
+fn read_untracked_contents(_root: &Path, _path: &str) -> Result<String> {
+    bail!("Safe no-follow untracked previews are not supported on this platform")
+}
+
+fn bound_file_preview(mut text: String) -> String {
+    if text.len() > FILE_PREVIEW_LIMIT {
+        let mut end = FILE_PREVIEW_LIMIT;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        text.push_str(PREVIEW_TRUNCATED);
+    }
+    text
 }
 
 pub fn working_tree_details(root: &Path, tree: &WorkingTree) -> Result<String> {

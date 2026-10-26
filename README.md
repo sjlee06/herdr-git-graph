@@ -30,7 +30,7 @@ A read-only Git graph plugin for Herdr. Browse history and expand changed-file l
 - **Workspace-shared sidebar** — one sidebar follows the active tab without taking focus, keeping its view state.
 - **Branch and merge graph** — colored lanes with distinct current-branch, local-branch, remote-branch, and tag badges.
 - **Changed files** — expand a commit's file statuses and paths below it without hiding the sidebar graph.
-- **Diffs** — inspect commits and staged or unstaged changes in the full view.
+- **Diffs** — click a changed file in the sidebar to inspect its patch, or use the full view for complete commit diffs.
 - **Search** — find commits by message, author, ref, or hash.
 - **Live updates** — local changes appear automatically, checked every 2 seconds by default.
 - **Terminal integration** — follows your terminal theme, drawing smooth curves with the standard Kitty graphics protocol in Herdr 0.9.0+ panes and using a text graph otherwise.
@@ -106,24 +106,26 @@ Run `herdr config check`, then `herdr server reload-config`. Press your prefix f
 
 ## Use
 
-By default, the sidebar starts with no commit selected. Click a commit node or row to select it and expand its changed-file statuses and paths immediately below it; the graph stays visible. Click the same commit again or press **Esc** to collapse the list and clear the selection. **↑** / **↓** select and expand commits; **Enter** toggles the expansion. The wheel scrolls freely through history and long file lists without changing the selection, and the scrollbar on the right shows your position. The sidebar lists filenames only; use the full view to inspect patches.
+By default, the sidebar starts with no commit selected. Click a commit node or row to select it and expand its changed-file statuses and paths immediately below it; the graph stays visible. Click the same commit again or press **Esc** to collapse the list and clear the selection. **↑** / **↓** select and expand commits; **Enter** toggles the expansion. The wheel scrolls freely through history and long file lists without changing the selection, and the scrollbar on the right shows your position.
+
+Click a file to inspect its diff inside the sidebar, then press **Esc** to return to the same expanded list. **Tab** focuses the file list; **↑** / **↓** select a file and **Enter** opens its diff. Scroll diffs with the wheel or **↑** / **↓**, and pan horizontally with **h** / **l**.
 
 In the full view, select a branch and press **Enter** to filter its history; press **a** to show all branches again. Select a commit or **Uncommitted changes** to inspect its diff below.
 
 | Key | Action |
 | --- | --- |
-| `Tab` / `Shift-Tab` | Switch panels in the full view |
-| `↑` `↓` / `j` `k` | Select and expand commits in the sidebar; navigate items or scroll the diff in the full view |
-| `Enter` | Apply search; toggle the inline file list in the sidebar; apply a branch filter / focus the inspector in the full view |
+| `Tab` / `Shift-Tab` | Switch commit / file navigation in the sidebar; switch panels in the full view |
+| `↑` `↓` / `j` `k` | Navigate commits or files, or scroll the diff |
+| `Enter` | Apply search; toggle a sidebar file list or open its selected file; apply a branch filter / focus the inspector in the full view |
 | `h` / `l` | Scroll diff text horizontally, or pan the graph in History |
-| `Esc` | Collapse the sidebar file list and deselect; clear search / close Help |
+| `Esc` | Return from a file diff to the list; collapse the sidebar list and deselect; clear search / close Help |
 | `/`, then `n` / `N` | Search, then jump between matches |
 | `a` | Show all branches |
-| `r` | Reload local Git history |
+| `r` | Reload the file diff or local Git history |
 | `?` | Open / close Help |
 | `q` / `Ctrl-C` | Quit (`q` closes Help first) |
 
-In the full view, mouse clicks select items. The wheel scrolls the panel under the pointer.
+In the full view, mouse clicks select items. The wheel scrolls the panel under the pointer. Sidebar file diffs show staged and unstaged changes separately; untracked text files show a read-only content preview.
 
 The viewer reads local Git data. Fetch in your normal Git workflow to see new remote commits. Search covers the loaded history: **2,000 commits by default**, configurable with `--limit`.
 

@@ -572,13 +572,40 @@ fn sidebar_click_expands_real_changed_files_inline_and_escape_restores_history()
     assert_eq!(app.focus, Focus::History);
     assert!(app.detail_area.is_empty());
 
-    // File rows are not commit hit targets and must leave the expansion alone.
+    // File rows open only that file's patch, without changing the expanded commit.
     app.mouse(click(column + 10, row + 2), Some(&worker));
     assert_eq!(app.selected, Some(1));
     assert_eq!(app.files, Some(Ok(expected.clone())));
-    assert_eq!(app.focus, Focus::History);
+    assert_eq!(app.focus, Focus::Details);
+    assert_eq!(app.file_diff.as_ref().unwrap().path, "selected-only.txt");
+    app.request_detail(&worker);
+    let response = worker
+        .receiver
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    assert!(matches!(response, Response::FileDetail { .. }));
+    assert!(app.apply(response));
+    assert!(app.detail.contains("+selected addition"));
+    assert!(!app.detail.contains("selected patch contents"));
+    assert!(!app.detail.contains("newest patch contents"));
     draw(&mut terminal, &mut app);
-    assert_eq!(screen_lines(&terminal), lines);
+    let diff = screen_lines(&terminal).join("\n");
+    assert!(diff.contains("FILE DIFF"));
+    assert!(diff.contains("+selected addition"));
+    assert!(app.history_area.is_empty());
+    app.key(
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        Some(&worker),
+    );
+    draw(&mut terminal, &mut app);
+    assert_eq!(app.selected, Some(1));
+    assert!(app.file_diff.is_none());
+    assert!(
+        screen_lines(&terminal)
+            .join("\n")
+            .contains("selected-only.txt")
+    );
+    assert_eq!(app.top, top);
 
     // Clicking the same node collapses its file rows without opening an inspector.
     app.mouse(click(column, row), Some(&worker));

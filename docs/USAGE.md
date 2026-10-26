@@ -37,7 +37,9 @@ herdr plugin pane open --plugin herdr.git-graph --entrypoint sidebar \
 
 By default, the sidebar starts with no commit selected, showing the graph and commit list with repository and HEAD context above it. Each collapsed commit retains two terminal rows for graph connections. Commits with branch or tag badges show badges first and a one-line subject below; other commits show just the subject. Hashes, the branch list, and author/date columns are hidden in this layout.
 
-Click a commit node or row to select it and expand its changed-file statuses and paths immediately below it. The graph stays visible. Click the same commit again or press `Esc` to collapse the list and clear the selection. Keyboard users can select and expand commits with `↑` / `↓` or `j` / `k`; `Enter` collapses the selected commit, or expands the top commit if none is selected. File lists load asynchronously. The sidebar shows filenames only, with no diff inspector or patch action on file clicks; use the full view for patches, complete messages, refs, and hashes.
+Click a commit node or row to select it and expand its changed-file statuses and paths immediately below it. The graph stays visible. Click the same commit again or press `Esc` to collapse the list and clear the selection. Keyboard users can select and expand commits with `↑` / `↓` or `j` / `k`; `Enter` collapses the selected commit, or expands the top commit if none is selected. File lists load asynchronously.
+
+Click a file to open its diff inside the sidebar; `Esc` returns to the same expanded list and scroll position. Keyboard users can press `Tab` to focus the file list, select a file with `↑` / `↓` or `j` / `k`, and press `Enter` to open its diff. `Tab` returns to commit navigation; `Esc` collapses the list. In the diff view, the wheel, `↑` / `↓`, and `PageUp` / `PageDown` scroll the patch; `h` / `l` pan horizontally, and `r` reloads that file. Use the full view for complete commit diffs, messages, refs, and hashes.
 
 The mouse wheel scrolls freely through history and expanded file lists without changing the selection, even when a file list is taller than the viewport. `PageUp` / `PageDown` scroll by viewport rows. A scrollbar on the right shows your position, including rows within expanded lists.
 
@@ -49,7 +51,7 @@ Herdr refuses cross-tab moves when either the source or destination tab is zoome
 
 The first open requests a 40-column outer width so the full `Uncommitted changes` subject fits alongside the graph, including room for Herdr borders and its scrollbar. Adjust the split width by dragging the divider or using Herdr's resize mode (`prefix+r` by default). The chosen outer width is remembered for moves, tab-close recovery, and toggle reopen, constrained only by Herdr's 10–90% split-ratio limits; it is no longer capped at half the target pane's width. A narrow destination can temporarily reduce the actual width without changing the remembered target. Moving to a wider tab or recreating the sidebar after a tab closes requests that target width again. Direct `plugin pane open` and standalone `--sidebar` use the size supplied by the host. The minimum content size is 24 columns × 8 rows.
 
-Focus the sidebar with `prefix+l` from the pane on its left. Search, `n`/`N`, navigation, graph panning, `r`, help, and quit remain available. `Enter` applies an active search; otherwise it toggles the inline file list. `Tab`, `Shift-Tab`, and `d` do not switch panels in the sidebar. Close it with `q` while it is focused (`q` closes Help first), or close its pane, to end sharing. Event hooks do not reopen an explicitly closed sidebar, even if its former tab is closed afterward; the next explicit sidebar action creates it again.
+Focus the sidebar with `prefix+l` from the pane on its left. Search, `n`/`N`, navigation, graph panning, `r`, help, and quit remain available. `Enter` applies an active search, toggles a commit's file list, or opens the selected file, depending on focus. `Tab` and `Shift-Tab` switch between commit and file navigation when a file list is expanded; `d` has no effect in the sidebar. Close it with `q` while it is focused (`q` closes Help first), or close its pane, to end sharing. Event hooks do not reopen an explicitly closed sidebar, even if its former tab is closed afterward; the next explicit sidebar action creates it again.
 
 Closing the tab containing a shared sidebar does not end sharing if another tab remains in the same workspace. A `tab.closed` hook recreates it on the remaining active tab without taking focus, using the original repository and theme even if the destination is not a Git directory. Herdr terminates the old process when its tab closes; the new process restores the saved selection (including no selection), viewport, horizontal graph position, search query/mode, and target width. A restored selection expands that commit again and reloads its file list asynchronously. The viewport includes the top commit and the row offset within it, so it can resume partway through a long file list; older saved states default to row offset zero. If a saved commit is no longer in the loaded history, selection and viewport fall back to valid indices. Row offsets are normalized to the available rows as file lists load and the pane is resized. The sidebar viewport remains independent of selection, which can be off-screen. Recreation can cause a brief layout change. If the workspace is not focused, restoration waits until it is focused again. Closing the last tab removes the workspace and does not recreate its sidebar elsewhere.
 
@@ -61,7 +63,7 @@ Suggested bindings are `prefix+u` for `herdr.git-graph.toggle-sidebar` and `pref
 
 When the current checkout has changes, a hollow node labeled **Uncommitted changes** appears above HEAD. Its second line counts staged, unstaged, untracked, and conflicted files. A partially staged file contributes to both staged and unstaged counts. The node appears in the all-refs view and when filtering the checked-out local branch, including detached HEAD and repositories with no commits. Other branch filters omit it. It does not count toward `--limit` or the commit count.
 
-Select the node in the full view to see file statuses and separate staged and unstaged patches. In the sidebar, selecting it expands only the changed-file statuses and paths below the node. Rename paths and conflicts are included. Untracked files are listed as `??`; their contents are not included in the patch. Ignored untracked files are omitted.
+Select the node in the full view to see file statuses and separate staged and unstaged patches. In the sidebar, selecting it expands the changed-file statuses and paths below the node; click a file to view its staged and unstaged patches separately. Rename paths and conflicts are included. Untracked files are listed as `??`; clicking one in the sidebar shows a bounded read-only text preview, while the full-view commit inspector omits their contents. Binary files, directories, and symbolic links have explicit preview messages; symbolic-link targets are not followed. Ignored untracked files are omitted.
 
 Local changes are checked in a background worker every **2 seconds**, so updates normally appear within about 2 seconds plus Git query time. File edits, staging, commits, tags, checkout, and local ref updates after a fetch are picked up automatically. The displayed working tree diff is reread even if a file's status remains modified after another edit. Existing selection, search, focus, and scroll position are preserved where possible; when a selected WIP node disappears, selection moves to HEAD.
 
@@ -78,27 +80,27 @@ Git runs with `--no-optional-locks`, so background status queries do not rewrite
 
 | Input | Action |
 | --- | --- |
-| `Tab` / `Shift-Tab` | Next / previous panel in the full view |
-| `↑` `↓` / `j` `k` | Select and expand commits in the sidebar; navigate items or scroll the inspector in the full view |
+| `Tab` / `Shift-Tab` | Switch commit / file navigation in the sidebar; next / previous panel in the full view |
+| `↑` `↓` / `j` `k` | Navigate commits or files, or scroll the inspector |
 | `Enter` in Branches | Apply the selected branch filter |
-| `Enter` in History | Toggle the inline file list in the sidebar; open and focus the inspector in the full view |
+| `Enter` in History | Toggle the inline file list in the sidebar; open a selected file diff when navigating files; open and focus the inspector in the full view |
 | `PageUp` / `PageDown` | Scroll viewport rows in the sidebar; move one page in the full view |
 | `Home` / `End`, or `g` / `G` | First / last item |
 | `←` `→` / `h` `l` in History | Pan graph columns horizontally |
-| `←` `→` / `h` `l` in Inspector | Scroll diff text horizontally |
+| `←` `→` / `h` `l` in Inspector or file diff | Scroll diff text horizontally |
 | `/` | Enter search mode |
 | `Enter` while searching | Keep the query and return to navigation |
 | `n` / `N` | Next / previous match, wrapping at the ends |
-| `Esc` | Close Help or clear search; collapse the sidebar file list and deselect |
+| `Esc` | Close Help or clear search; return from a sidebar file diff to the list, or collapse the list and deselect |
 | `a` | Load all branches |
-| `r` | Reload the current local history view |
+| `r` | Reload the file diff or current local history view |
 | `d` | Show / hide the inspector in the full view |
 | `?` | Open / close Help |
 | `q` / `Ctrl-C` | Quit; `q` closes Help first if it is open |
-| Left click | Expand a commit's file list in the sidebar; click the same commit to collapse; select a commit or apply a branch filter in the full view |
+| Left click | Expand a commit's file list in the sidebar, open a file diff, or click the same commit to collapse; select a commit or apply a branch filter in the full view |
 | Mouse wheel | Scroll the panel under the pointer; sidebar history and expanded file lists scroll without changing selection |
 
-Footer hints keep complete key/action pairs at every supported width, always showing `/ search`, `? help`, and `q quit` outside search. Additional hints appear as space allows. Long search input scrolls to keep the cursor visible. Help wraps to the available width and scrolls with `↑↓` / `j` / `k`, `PgUp` / `PgDn`, and `Home` / `End` (or `g` / `G`); `Esc`, `?`, or `q` closes Help. `Ctrl-C` quits immediately, including during search and Help.
+Footer hints keep complete key/action pairs at every supported width. History prioritizes `/ search`, `? help`, and `q quit`; file navigation prioritizes `Enter diff` and `Esc fold`, and the file diff prioritizes `Esc files` and `q quit`. Additional hints appear as space allows. Long search input scrolls to keep the cursor visible. Help wraps to the available width and scrolls with `↑↓` / `j` / `k`, `PgUp` / `PgDn`, and `Home` / `End` (or `g` / `G`); `Esc`, `?`, or `q` closes Help. `Ctrl-C` quits immediately, including during search and Help.
 
 ## Terminal theme
 

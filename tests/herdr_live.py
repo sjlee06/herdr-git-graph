@@ -135,9 +135,15 @@ def verify(base, herdr):
         return tuple(re.findall(r"History \d{2}|Initial history|Uncommitted changes", screen))
 
     def graph_state(screen):
-        selection = re.search(r"\b(\d+)/(\d+)\s*·", screen)
+        # The sidebar footer describes the visible range, not the selection.
+        # Read its persisted selection independently so an off-screen selection
+        # cannot be mistaken for the last visible commit.
+        count = re.search(r"\b\d+–\d+/(\d+)\s*·", screen)
+        selected = saved_view(sidebar).get("view", {}).get("selected")
         subjects = visible_history(screen)
-        return (selection.groups(), subjects) if selection and subjects else None
+        if count and type(selected) is int and subjects:
+            return ((str(selected + 1), count.group(1)), subjects)
+        return None
 
     def shared_at(sidebar, workspace, tab, source, ordinary, remembered_width=None):
         def snapshot():
@@ -254,7 +260,7 @@ def verify(base, herdr):
             wait_for("toggled-on graph output", lambda: read_graph(sidebar["pane_id"]),
                      lambda text: "GIT GRAPH" in text and "Uncommitted changes" in text)
 
-            # Move well beyond the initial viewport and retain both the footer
+            # Move well beyond the initial viewport and retain both the saved
             # selection index and visible history subjects across tab moves.
             run("pane", "send-keys", sidebar["pane_id"], "G")
             wait_for("selection at end of history", lambda: read_graph(sidebar["pane_id"]),

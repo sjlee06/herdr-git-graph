@@ -16,6 +16,7 @@ use std::{
 pub enum Focus {
     Branches,
     History,
+    Files,
     Details,
 }
 
@@ -37,6 +38,11 @@ pub enum Request {
         oid: String,
         id: u64,
     },
+    FileDetail {
+        oid: String,
+        file: git::ChangedFile,
+        id: u64,
+    },
 }
 
 pub enum Response {
@@ -54,6 +60,12 @@ pub enum Response {
         oid: String,
         id: u64,
         result: Result<Vec<git::ChangedFile>, String>,
+    },
+    FileDetail {
+        oid: String,
+        file: git::ChangedFile,
+        id: u64,
+        result: Result<String, String>,
     },
     Refreshed {
         result: Result<Repository, String>,
@@ -80,15 +92,20 @@ impl Worker {
                 let mut refresh = None;
                 let mut detail = None;
                 let mut files = None;
+                let mut file_detail = None;
                 for request in std::iter::once(request).chain(requests.try_iter()) {
                     match request {
                         Request::Load { .. } => load = Some(request),
                         Request::Refresh { .. } => refresh = Some(request),
                         Request::Detail { .. } => detail = Some(request),
                         Request::Files { .. } => files = Some(request),
+                        Request::FileDetail { .. } => file_detail = Some(request),
                     }
                 }
-                for request in [load, refresh, detail, files].into_iter().flatten() {
+                for request in [load, refresh, detail, files, file_detail]
+                    .into_iter()
+                    .flatten()
+                {
                     let response = match request {
                         Request::Load { reference, id } => {
                             let result = git::load(&root, reference.as_deref(), limit)
@@ -132,6 +149,13 @@ impl Worker {
                             oid,
                             id,
                         },
+                        Request::FileDetail { oid, file, id } => Response::FileDetail {
+                            result: git::file_details(&root, &oid, &file)
+                                .map_err(|e| format!("{e:#}")),
+                            oid,
+                            file,
+                            id,
+                        },
                         Request::Detail { oid, id } => Response::Detail {
                             result: git::details(&root, &oid).map_err(|e| format!("{e:#}")),
                             oid,
@@ -156,6 +180,9 @@ pub struct App {
     pub top: usize,
     pub top_offset: usize,
     pub history_rows: Vec<Option<usize>>,
+    pub history_file_rows: Vec<Option<usize>>,
+    pub file_selected: Option<usize>,
+    pub file_diff: Option<git::ChangedFile>,
     pub files: Option<Result<Vec<git::ChangedFile>, String>>,
     pub graph_offset: usize,
     pub branch_selected: usize,
@@ -191,6 +218,8 @@ pub struct App {
     file_cache: HashMap<String, Vec<git::ChangedFile>>,
     requested_files_oid: Option<String>,
     pending_row_offset: Option<usize>,
+    file_request_id: u64,
+    requested_file: bool,
 }
 
 impl App {
@@ -205,6 +234,9 @@ impl App {
             top: 0,
             top_offset: 0,
             history_rows: Vec::new(),
+            history_file_rows: Vec::new(),
+            file_selected: None,
+            file_diff: None,
             files: None,
             graph_offset: 0,
             branch_selected: 0,
@@ -245,6 +277,8 @@ impl App {
             file_cache: HashMap::new(),
             requested_files_oid: None,
             pending_row_offset: None,
+            file_request_id: 0,
+            requested_file: false,
         };
         app.selection_changed();
         app
@@ -373,9 +407,11 @@ impl App {
     pub fn detail_line_count(&self) -> usize {
         self.detail.lines().count()
             + usize::from(
-                self.selected
-                    .and_then(|index| self.repo.commits.get(index))
-                    .is_some_and(|commit| !commit.is_worktree() && !commit.refs.is_empty()),
+                self.file_diff.is_none()
+                    && self
+                        .selected
+                        .and_then(|index| self.repo.commits.get(index))
+                        .is_some_and(|commit| !commit.is_worktree() && !commit.refs.is_empty()),
             )
     }
 
@@ -402,7 +438,9 @@ impl App {
             .send(Request::Refresh {
                 reference: self.reference.clone(),
                 id: self.load_id,
-                detail: self.show_details && self.selected_oid() == Some(git::WORKTREE_OID),
+                detail: !self.sidebar
+                    && self.show_details
+                    && self.selected_oid() == Some(git::WORKTREE_OID),
             })
             .is_ok()
         {
@@ -411,6 +449,14 @@ impl App {
     }
 
     pub fn selection_changed(&mut self) {
+        self.file_selected = None;
+        self.file_diff = None;
+        self.file_request_id += 1;
+        self.requested_file = false;
+        if self.sidebar {
+            self.show_details = false;
+            self.focus = Focus::History;
+        }
         self.detail_scroll = 0;
         self.detail_horizontal = 0;
         self.requested_oid = None;
@@ -442,7 +488,59 @@ impl App {
         };
     }
 
+    pub fn open_file(&mut self, index: usize) {
+        let Some(file) = self
+            .files
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .and_then(|files| files.get(index))
+            .cloned()
+        else {
+            return;
+        };
+        self.file_selected = Some(index);
+        self.file_diff = Some(file);
+        self.focus = Focus::Details;
+        self.show_details = true;
+        self.detail_scroll = 0;
+        self.detail_horizontal = 0;
+        self.file_request_id += 1;
+        self.requested_file = false;
+        self.detail_due = Instant::now();
+        if !self.demo {
+            self.detail = "Loading file…".into();
+        }
+    }
+
+    fn close_file(&mut self) {
+        self.file_diff = None;
+        self.show_details = false;
+        self.focus = Focus::Files;
+        self.file_request_id += 1;
+        self.requested_file = false;
+    }
+
     pub fn request_detail(&mut self, worker: &Worker) {
+        if self.sidebar
+            && let Some(file) = self.file_diff.clone()
+        {
+            if !self.demo
+                && !self.loading
+                && !self.requested_file
+                && Instant::now() >= self.detail_due
+                && let Some(oid) = self.selected_oid().map(str::to_owned)
+            {
+                self.requested_file = worker
+                    .sender
+                    .send(Request::FileDetail {
+                        oid,
+                        file,
+                        id: self.file_request_id,
+                    })
+                    .is_ok();
+            }
+            return;
+        }
         if self.sidebar {
             if !self.demo
                 && !self.loading
@@ -589,7 +687,42 @@ impl App {
                 }
                 if self.selected_oid() == Some(git::WORKTREE_OID) {
                     if self.sidebar {
+                        let selected_path = self.file_selected.and_then(|index| {
+                            self.files
+                                .as_ref()
+                                .and_then(|result| result.as_ref().ok())
+                                .and_then(|files| files.get(index))
+                                .map(|file| file.path.clone())
+                        });
                         self.files = Some(Ok(self.repo.worktree.files.clone()));
+                        self.file_selected = selected_path.and_then(|path| {
+                            self.repo
+                                .worktree
+                                .files
+                                .iter()
+                                .position(|file| file.path == path)
+                        });
+                        if let Some(file) = &self.file_diff {
+                            if let Some(index) = self
+                                .repo
+                                .worktree
+                                .files
+                                .iter()
+                                .position(|f| f.path == file.path)
+                            {
+                                self.file_selected = Some(index);
+                                self.file_diff = Some(self.repo.worktree.files[index].clone());
+                                self.file_request_id += 1;
+                                self.requested_file = false;
+                                self.detail_due = Instant::now();
+                            } else {
+                                self.close_file();
+                                self.file_selected = None;
+                                self.focus = Focus::History;
+                            }
+                        } else if self.focus == Focus::Files && self.file_selected.is_none() {
+                            self.focus = Focus::History;
+                        }
                     }
                     if let Some(detail) = detail {
                         let text = detail.unwrap_or_else(|e| format!("Cannot load changes: {e}"));
@@ -608,6 +741,21 @@ impl App {
                     return true;
                 }
                 return false;
+            }
+            Response::FileDetail {
+                oid,
+                file,
+                id,
+                result,
+            } if id == self.file_request_id
+                && self.selected_oid() == Some(&oid)
+                && self.file_diff.as_ref() == Some(&file) =>
+            {
+                self.detail =
+                    result.unwrap_or_else(|e| format!("Cannot load file: {e}\nPress r to retry."));
+                self.detail_scroll = self
+                    .detail_scroll
+                    .min(self.detail_line_count().saturating_sub(1));
             }
             Response::Files { oid, id, result } if id == self.load_id => {
                 if self.selected_oid() == Some(&oid) {
@@ -677,6 +825,26 @@ impl App {
                 };
                 self.selection_changed();
                 self.keep_selection_visible();
+            }
+            Focus::Files => {
+                if let Some(files) = self.files.as_ref().and_then(|result| result.as_ref().ok())
+                    && !files.is_empty()
+                {
+                    let index = self
+                        .file_selected
+                        .unwrap_or(0)
+                        .saturating_add_signed(delta)
+                        .min(files.len() - 1);
+                    self.file_selected = Some(index);
+                    let start = self.selected.unwrap() * 2 + 2 + index;
+                    let position = self.history_scroll_position();
+                    let visible = usize::from(self.history_area.height).max(1);
+                    if start < position {
+                        self.scroll_history_to(start);
+                    } else if start >= position + visible {
+                        self.scroll_history_to(start + 1 - visible);
+                    }
+                }
             }
             Focus::Branches => {
                 self.branch_selected = self
@@ -776,7 +944,35 @@ impl App {
                 self.help = true;
                 self.help_scroll = 0;
             }
-            KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('d') if self.sidebar => {}
+            KeyCode::Esc if self.sidebar && self.file_diff.is_some() => self.close_file(),
+            KeyCode::Char('r') if self.sidebar && self.file_diff.is_some() => {
+                self.file_request_id += 1;
+                self.requested_file = false;
+                self.detail_due = Instant::now();
+            }
+            KeyCode::Tab | KeyCode::BackTab if self.sidebar => {
+                if self.file_diff.is_none() {
+                    if self.focus == Focus::Files {
+                        self.focus = Focus::History;
+                    } else if self
+                        .files
+                        .as_ref()
+                        .and_then(|result| result.as_ref().ok())
+                        .is_some_and(|files| !files.is_empty())
+                    {
+                        self.focus = Focus::Files;
+                        self.file_selected = Some(0);
+                        self.navigate(0);
+                    }
+                }
+            }
+            KeyCode::Char('d') if self.sidebar => {}
+            KeyCode::Enter if self.sidebar && self.focus == Focus::Files => {
+                if let Some(index) = self.file_selected {
+                    self.open_file(index);
+                }
+            }
+            KeyCode::Enter if self.sidebar && self.file_diff.is_some() => {}
             KeyCode::Enter if self.sidebar && !self.repo.commits.is_empty() => {
                 self.toggle_sidebar_commit(self.selected.unwrap_or(self.top));
             }
@@ -793,13 +989,16 @@ impl App {
             }
             KeyCode::BackTab => {
                 self.focus = match self.focus {
-                    Focus::Details => Focus::History,
+                    Focus::Details | Focus::Files => Focus::History,
                     Focus::History => Focus::Branches,
                     _ if self.show_details => Focus::Details,
                     _ => Focus::History,
                 }
             }
             KeyCode::Char('/') => {
+                if self.sidebar && self.file_diff.is_some() {
+                    self.close_file();
+                }
                 self.searching = true;
                 self.focus = Focus::History;
                 self.query.clear();
@@ -835,13 +1034,13 @@ impl App {
             _ if self.loading => {}
             KeyCode::Down | KeyCode::Char('j') => self.navigate(1),
             KeyCode::Up | KeyCode::Char('k') => self.navigate(-1),
-            KeyCode::PageDown if self.sidebar => {
+            KeyCode::PageDown if self.sidebar && self.focus != Focus::Details => {
                 self.pending_row_offset = None;
                 self.scroll_history_to(
                     self.history_scroll_position() + usize::from(self.history_area.height),
                 );
             }
-            KeyCode::PageUp if self.sidebar => {
+            KeyCode::PageUp if self.sidebar && self.focus != Focus::Details => {
                 self.pending_row_offset = None;
                 self.scroll_history_to(
                     self.history_scroll_position()
@@ -910,7 +1109,9 @@ impl App {
                 Focus::History => {
                     let row = usize::from(event.row.saturating_sub(self.history_area.y));
                     if self.sidebar {
-                        if let Some(index) = self.history_rows.get(row).copied().flatten() {
+                        if let Some(index) = self.history_file_rows.get(row).copied().flatten() {
+                            self.open_file(index);
+                        } else if let Some(index) = self.history_rows.get(row).copied().flatten() {
                             self.toggle_sidebar_commit(index);
                         }
                     } else {
@@ -964,6 +1165,127 @@ mod tests {
             id: 0,
             elapsed: Duration::ZERO,
         }
+    }
+
+    #[test]
+    fn file_diff_requests_are_scoped_and_stale_replies_are_ignored() {
+        let mut app = App::new(git::demo(), 2000, false).with_sidebar(true);
+        app.selected = Some(0);
+        app.selection_changed();
+        let file = git::ChangedFile {
+            status: "M".into(),
+            path: "selected.rs".into(),
+            original_path: None,
+        };
+        app.files = Some(Ok(vec![file.clone()]));
+        let (sender, requests) = mpsc::channel();
+        let (_, receiver) = mpsc::channel();
+        let worker = Worker { sender, receiver };
+        app.open_file(0);
+        app.request_detail(&worker);
+        let Request::FileDetail {
+            oid,
+            file: requested,
+            id,
+        } = requests.try_recv().unwrap()
+        else {
+            panic!("Expected a file-scoped request");
+        };
+        assert_eq!(requested, file);
+        app.request_detail(&worker);
+        assert!(requests.try_recv().is_err());
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), None);
+        assert_eq!(app.focus, Focus::Files);
+        assert!(app.file_diff.is_none());
+        app.open_file(0);
+        assert!(!app.apply(Response::FileDetail {
+            oid: oid.clone(),
+            file: file.clone(),
+            id,
+            result: Ok("stale diff".into())
+        }));
+        app.request_detail(&worker);
+        let Request::FileDetail { id, .. } = requests.try_recv().unwrap() else {
+            panic!("Expected a file-scoped request");
+        };
+        assert!(app.apply(Response::FileDetail {
+            oid,
+            file,
+            id,
+            result: Err("failed".into())
+        }));
+        assert!(app.detail.contains("Press r to retry"));
+        app.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE), None);
+        app.request_detail(&worker);
+        assert!(matches!(
+            requests.try_recv().unwrap(),
+            Request::FileDetail { .. }
+        ));
+        app.selection_changed();
+        assert!(app.file_diff.is_none());
+        assert_eq!(app.focus, Focus::History);
+    }
+
+    #[test]
+    fn worktree_refresh_preserves_the_keyboard_selected_file_by_path() {
+        let file = |path: &str| git::ChangedFile {
+            status: " M".into(),
+            path: path.into(),
+            original_path: None,
+        };
+        let mut repo = with_worktree(git::demo());
+        repo.worktree.files = vec![file("b.rs"), file("c.rs")];
+        let mut app = App::new(repo, 2000, false).with_sidebar(true);
+        app.selected = Some(0);
+        app.selection_changed();
+        app.focus = Focus::Files;
+        app.file_selected = Some(1);
+        let mut repo = app.repo.clone();
+        repo.worktree.files.insert(0, file("a.rs"));
+        assert!(app.apply(refreshed(repo, None)));
+        assert_eq!(app.file_selected, Some(2));
+        assert_eq!(app.focus, Focus::Files);
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), None);
+        assert_eq!(app.file_diff.as_ref().unwrap().path, "c.rs");
+        app.close_file();
+        let mut repo = app.repo.clone();
+        repo.worktree.files.pop();
+        assert!(app.apply(refreshed(repo, None)));
+        assert_eq!(app.file_selected, None);
+        assert_eq!(app.focus, Focus::History);
+    }
+
+    #[test]
+    fn worktree_file_diff_refreshes_even_when_status_is_unchanged() {
+        let mut repo = with_worktree(git::demo());
+        let file = git::ChangedFile {
+            status: " M".into(),
+            path: "tracked.rs".into(),
+            original_path: None,
+        };
+        repo.worktree.files = vec![file.clone()];
+        let mut app = App::new(repo, 2000, false).with_sidebar(true);
+        app.selected = Some(0);
+        app.selection_changed();
+        app.open_file(0);
+        app.detail = "old contents".into();
+        app.requested_file = true;
+        let old_request = app.file_request_id;
+        assert!(!app.apply(refreshed(app.repo.clone(), None)));
+        assert!(!app.requested_file);
+        assert!(app.file_request_id > old_request);
+        assert_eq!(app.detail, "old contents");
+        assert!(!app.apply(Response::FileDetail {
+            oid: git::WORKTREE_OID.into(),
+            file,
+            id: old_request,
+            result: Ok("stale".into())
+        }));
+        let mut repo = app.repo.clone();
+        repo.worktree.files.clear();
+        assert!(app.apply(refreshed(repo, None)));
+        assert!(app.file_diff.is_none());
+        assert_eq!(app.focus, Focus::History);
     }
 
     #[test]

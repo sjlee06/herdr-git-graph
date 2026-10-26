@@ -58,6 +58,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, smooth: bool) -> Option<Viewport> 
     );
     app.history_area = Rect::default();
     app.history_rows.clear();
+    app.history_file_rows.clear();
     app.branches_area = Rect::default();
     app.detail_area = Rect::default();
     let (min_width, min_height) = if app.sidebar { (24, 8) } else { (64, 18) };
@@ -139,6 +140,10 @@ pub fn draw(frame: &mut Frame, app: &mut App, smooth: bool) -> Option<Viewport> 
 }
 
 fn sidebar(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option<Viewport> {
+    if app.file_diff.is_some() {
+        file_diff(frame, app, area);
+        return None;
+    }
     let theme = app.theme;
     let rows = Layout::vertical([
         Constraint::Length(2),
@@ -206,6 +211,70 @@ fn sidebar(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
         rows[2],
     );
     view
+}
+
+fn file_diff(frame: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme;
+    let rows = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(4),
+        Constraint::Length(2),
+    ])
+    .split(area);
+    let file = app.file_diff.as_ref().unwrap();
+    let path = if let Some(original) = &file.original_path {
+        format!("{} → {}", clean(original), clean(&file.path))
+    } else {
+        clean(&file.path)
+    };
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::styled(
+                elide(&path, rows[0].width, true),
+                Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD),
+            ),
+            Line::styled(
+                format!(
+                    "{} · {}",
+                    file.status.trim(),
+                    app.selected_oid()
+                        .map_or("", |oid| if oid == crate::git::WORKTREE_OID {
+                            "Uncommitted changes"
+                        } else {
+                            &oid[..oid.len().min(12)]
+                        })
+                ),
+                theme.muted(),
+            ),
+        ])
+        .style(Style::default().bg(theme.panel())),
+        rows[0],
+    );
+    details(frame, app, rows[1]);
+    let visible = usize::from(rows[1].height.saturating_sub(2));
+    let count = app.detail_line_count();
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::styled(
+                elide(
+                    &format!(
+                        "{}–{}/{}",
+                        app.detail_scroll + 1,
+                        (app.detail_scroll + visible).min(count),
+                        count
+                    ),
+                    rows[2].width,
+                    false,
+                ),
+                theme.muted(),
+            ),
+            Line::styled(
+                key_hints(app, rows[2].width),
+                Style::default().fg(theme.accent()).bg(theme.panel()),
+            ),
+        ]),
+        rows[2],
+    );
 }
 
 fn header(frame: &mut Frame, app: &App, area: Rect) {
@@ -330,7 +399,7 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
         } else {
             "HISTORY"
         },
-        app.focus == Focus::History,
+        matches!(app.focus, Focus::History | Focus::Files),
     );
     let inner = b.inner(area);
     frame.render_widget(b, area);
@@ -345,6 +414,7 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
     body.height -= body.height % 2;
     app.history_area = body;
     app.history_rows = vec![None; usize::from(body.height)];
+    app.history_file_rows = vec![None; usize::from(body.height)];
     let count = usize::from(body.height / 2).max(1);
     if app.sidebar {
         app.scroll_history_to(app.history_scroll_position());
@@ -498,8 +568,22 @@ fn history(frame: &mut Frame, app: &mut App, area: Rect, smooth: bool) -> Option
                     );
                 }
             } else {
+                let file_index = line - 2;
+                if app
+                    .files
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .is_some_and(|files| file_index < files.len())
+                {
+                    app.history_file_rows[usize::from(screen_y - body.y)] = Some(file_index);
+                }
+                let focused = app.focus == Focus::Files && app.file_selected == Some(file_index);
                 frame.render_widget(
-                    Block::default().style(Style::default().bg(theme.panel())),
+                    Block::default().style(Style::default().bg(if focused {
+                        theme.selection()
+                    } else {
+                        theme.panel()
+                    })),
                     Rect::new(cols[1].x, screen_y, cols[1].width, 1),
                 );
                 frame.render_widget(
@@ -553,11 +637,23 @@ fn file_line(app: &App, index: usize, width: u16) -> Line<'static> {
             } else {
                 clean(&file.path)
             };
-            let status = format!("  {} ", file.status.trim());
+            let focused = app.focus == Focus::Files && app.file_selected == Some(index);
+            let status = format!(
+                "{}{} ",
+                if focused { "› " } else { "  " },
+                file.status.trim()
+            );
             let available = width.saturating_sub(Line::raw(&status).width() as u16);
             return Line::from(vec![
                 Span::styled(status, Style::default().fg(color)),
-                Span::styled(elide(&path, available, true), theme.muted()),
+                Span::styled(
+                    elide(&path, available, true),
+                    if focused {
+                        theme.selected_text().fg(theme.fg())
+                    } else {
+                        theme.muted()
+                    },
+                ),
             ]);
         }
     };
@@ -661,7 +757,9 @@ fn details(frame: &mut Frame, app: &mut App, area: Rect) {
     let theme = app.theme;
     let b = block(
         theme,
-        if app.selected_oid() == Some(crate::git::WORKTREE_OID) {
+        if app.file_diff.is_some() {
+            "FILE DIFF"
+        } else if app.selected_oid() == Some(crate::git::WORKTREE_OID) {
             "WORKING TREE"
         } else {
             "COMMIT INSPECTOR"
@@ -671,11 +769,28 @@ fn details(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = b.inner(area);
     app.detail_area = area;
     frame.render_widget(b, area);
+    if app.file_diff.is_some() {
+        app.detail_scroll = app.detail_scroll.min(
+            app.detail_line_count()
+                .saturating_sub(usize::from(inner.height)),
+        );
+        scrollbar(
+            frame,
+            theme,
+            area,
+            inner,
+            app.detail_line_count(),
+            usize::from(inner.height),
+            app.detail_scroll,
+        );
+    }
     // Ref decorations can change while the immutable commit/diff stays cached.
     let refs = app
         .selected
         .and_then(|index| app.repo.commits.get(index))
-        .filter(|commit| !commit.is_worktree() && !commit.refs.is_empty())
+        .filter(|commit| {
+            app.file_diff.is_none() && !commit.is_worktree() && !commit.refs.is_empty()
+        })
         .map(|commit| format!("Refs: {}", commit.refs));
     let lines: Vec<_> = refs
         .as_deref()
@@ -756,14 +871,25 @@ fn key_hints(app: &App, width: u16) -> String {
     if app.searching {
         return "Enter apply · Esc clear".into();
     }
-    let mut hints = vec!["/ search", "? help", "q quit"];
-    let extras: &[&str] = if app.sidebar {
+    let mut hints = if app.file_diff.is_some() {
+        vec!["Esc files", "q quit"]
+    } else if app.sidebar && app.focus == Focus::Files {
+        vec!["Enter diff", "Esc fold"]
+    } else {
+        vec!["/ search", "? help", "q quit"]
+    };
+    let extras: &[&str] = if app.file_diff.is_some() {
+        &["↑↓ scroll", "h/l pan", "r reload", "? help"]
+    } else if app.sidebar && app.focus == Focus::Files {
+        &["↑↓ files", "? help", "q quit"]
+    } else if app.sidebar {
         &[
             if app.selected.is_some() {
-                "Esc fold"
+                "Tab files"
             } else {
                 "Click files"
             },
+            "Esc fold",
             "↑↓ move",
             "Enter toggle",
             "r reload",
@@ -855,7 +981,7 @@ fn help(frame: &mut Frame, app: &mut App, area: Rect) {
         "n / N: Next / previous match",
         "Enter in search: Apply",
         "Esc: Clear search",
-        "r: Reload repository",
+        "r: Reload file diff / repository",
         "a: Show all refs",
         "Mouse: Select / scroll",
         "q: Quit graph",
@@ -865,6 +991,12 @@ fn help(frame: &mut Frame, app: &mut App, area: Rect) {
         entries.extend([
             "Wheel: Scroll without selecting",
             "Click commit: Expand / fold files",
+            "Click file: Open its diff",
+            "Tab: Focus files / history",
+            "↑↓ in files: Select a file",
+            "Enter in files: Open diff",
+            "Esc in diff: Return to files",
+            "←→ / h l in diff: Scroll horizontally",
             "↑↓: Select and expand a commit",
             "Enter: Toggle files",
             "Esc: Fold files and deselect",
@@ -1436,6 +1568,16 @@ mod tests {
                 let file_line = app.history_rows.iter().position(Option::is_none).unwrap() as u16;
                 mouse(&mut app, MouseEventKind::Down(MouseButton::Left), file_line);
                 assert_eq!(app.selected, Some(top));
+                let diff = screen(&mut app, width, height).join("\n");
+                assert!(diff.contains("FILE DIFF"));
+                assert!(diff.contains("Esc files"));
+                assert!(app.history_rows.is_empty());
+                assert!(!app.detail_area.is_empty());
+                app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), None);
+                let files = screen(&mut app, width, height).join("\n");
+                assert!(files.contains("graph.rs"));
+                assert!(!files.contains("FILE DIFF"));
+                assert_eq!(app.selected, Some(top));
                 app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), None);
                 let graph = screen(&mut app, width, height).join("\n");
                 assert!(graph.contains("GIT GRAPH"));
@@ -1446,6 +1588,95 @@ mod tests {
                 assert!(app.history_rows.is_empty());
                 assert_eq!(app.history_area, Rect::default());
             }
+        }
+    }
+
+    #[test]
+    fn file_diff_uses_each_themes_patch_colors_and_hides_curve_viewports() {
+        use crate::theme::ThemeMode;
+        for theme in [
+            Theme::new(ThemeMode::Terminal),
+            Theme::new(ThemeMode::Classic),
+            Theme {
+                foreground: Some((40, 40, 40)),
+                background: Some((255, 255, 255)),
+                ..Theme::default()
+            },
+        ] {
+            let mut app = App::new(crate::git::demo(), 2000, true).with_sidebar(true);
+            app.theme = theme;
+            app.selected = Some(0);
+            app.selection_changed();
+            app.open_file(0);
+            app.detail = "@@ -1 +1 @@\n-old contents\n+new contents\n".into();
+            let mut terminal = Terminal::new(TestBackend::new(40, 16)).unwrap();
+            let mut viewport = None;
+            terminal
+                .draw(|frame| viewport = draw(frame, &mut app, true))
+                .unwrap();
+            assert!(viewport.is_none());
+            let cells = &terminal.backend().buffer().content;
+            for (symbol, color) in [
+                ("@", theme.hunk()),
+                ("-", theme.removed()),
+                ("+", theme.added()),
+            ] {
+                assert!(
+                    cells
+                        .iter()
+                        .any(|cell| cell.symbol() == symbol && cell.fg == color)
+                );
+            }
+            app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), None);
+            terminal
+                .draw(|frame| viewport = draw(frame, &mut app, true))
+                .unwrap();
+            assert!(viewport.is_some());
+        }
+    }
+
+    #[test]
+    fn keyboard_file_navigation_keeps_long_lists_visible_and_diff_scrolls() {
+        for width in [24, 40, 96] {
+            let mut app = App::new(crate::git::demo(), 2000, true).with_sidebar(true);
+            app.selected = Some(0);
+            app.selection_changed();
+            app.files = Some(Ok((0..40)
+                .map(|i| crate::git::ChangedFile {
+                    status: "M".into(),
+                    path: format!("src/파일-{i:02}.rs"),
+                    original_path: None,
+                })
+                .collect()));
+            screen(&mut app, width, 16);
+            app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), None);
+            assert_eq!(app.focus, Focus::Files);
+            app.key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE), None);
+            let files = screen(&mut app, width, 16).join("\n");
+            assert!(files.contains("-39.rs"), "{files}");
+            assert!(files.contains('›'));
+            let position = app.history_scroll_position();
+            app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), None);
+            app.detail = (0..60)
+                .map(|i| format!("+line-{i:02} with a very long line to pan horizontally\n"))
+                .collect();
+            let initial = screen(&mut app, width, 16).join("\n");
+            assert!(initial.contains("FILE DIFF"));
+            assert!(initial.contains("+line-00"));
+            assert!(!initial.contains("Refs:"));
+            app.key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE), None);
+            let page = screen(&mut app, width, 16).join("\n");
+            assert!(!page.contains("+line-00"));
+            app.key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE), None);
+            let end = screen(&mut app, width, 16).join("\n");
+            assert!(end.contains("+line-59"));
+            app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE), None);
+            assert_eq!(app.detail_horizontal, 4);
+            app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), None);
+            let restored = screen(&mut app, width, 16).join("\n");
+            assert!(restored.contains("-39.rs"));
+            assert_eq!(app.history_scroll_position(), position);
+            assert_eq!(app.file_selected, Some(39));
         }
     }
 
