@@ -347,6 +347,15 @@ class ScrollPTYTests(unittest.TestCase):
               f"top={final_view['top']}, offset={final_view['top_offset']}", flush=True)
         self.finish()
 
+    def test_burst_crosses_input_buffer_without_followup_input(self):
+        graph = self.start()
+        # 1,408 bytes: larger than Crossterm's 1 KiB read buffer, but small
+        # enough for one PTY write. No later input should be needed to wake it.
+        events = 128
+        graph.send(WHEEL_DOWN * events)
+        self.assert_position(events * 3)
+        self.finish()
+
     def test_continuous_wheels_paint_before_the_stream_stops(self):
         graph = self.start()
         mark = len(graph.output)

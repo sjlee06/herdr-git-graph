@@ -70,6 +70,16 @@ impl EventSource for UnixInternalEventSource {
             return Ok(Some(event));
         }
 
+        // Returning parsed events can leave input beyond our 1 KiB buffer unread.
+        // Re-arm before waiting: edge-triggered epoll need not notify us again
+        // until the descriptor is drained, and the terminal may be blocking.
+        let tty_raw_fd = self.tty_fd.raw_fd();
+        self.poll.registry().reregister(
+            &mut SourceFd(&tty_raw_fd),
+            TTY_TOKEN,
+            Interest::READABLE,
+        )?;
+
         let timeout = PollTimeout::new(timeout);
 
         loop {

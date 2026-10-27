@@ -1,4 +1,4 @@
-# Crossterm terminal disconnect patch
+# Crossterm terminal input patches
 
 `crossterm/` contains the source, manifest and MIT license from the published
 `crossterm` 0.29.0 crate. Upstream examples, README, other documentation and
@@ -19,6 +19,10 @@ The behavioral changes are confined to `src/event/source/unix/mio.rs`:
 1. A zero-byte terminal read returns `UnexpectedEof` instead of retrying forever.
 2. Read errors other than `WouldBlock` and `Interrupted` are returned instead of
    retried forever.
+3. Terminal read interest is re-armed after the parser's event queue is drained.
+   The reader can return after one 1 KiB chunk, before draining the descriptor to
+   `WouldBlock`. Linux's edge-triggered epoll can otherwise leave the remaining
+   input unread without another readiness notification.
 
 An unnecessary pair of parentheses in `src/terminal/sys/unix.rs` is also removed
 to keep the local dependency free of the upstream `unused_parens` warning.
@@ -30,5 +34,6 @@ drop the terminal guard and graphics stream.
 
 The root `[patch.crates-io]` applies the same implementation to all users of
 Crossterm 0.29, including Ratatui. Do not patch the machine's Cargo registry cache.
-Remove this override when a released upstream version handles both cases, after
-running `python3 tests/smoke.py ./bin/herdr-git-graph --work /tmp/hgg-smoke`.
+Remove this override when a released upstream version handles these cases, after
+checking terminal disconnect cleanup and running
+`python3 tests/scroll_pty.py ./bin/herdr-git-graph` on both Linux and macOS.
