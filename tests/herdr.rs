@@ -3,15 +3,209 @@
 use serde_json::{Value, json};
 use std::{
     fs,
-    os::unix::fs::PermissionsExt,
+    io::{BufRead, BufReader},
+    os::{fd::AsRawFd, unix::fs::PermissionsExt},
     path::PathBuf,
-    process::{Command, Output, Stdio},
+    process::{Child, Command, Output, Stdio},
     sync::{Arc, Barrier},
     thread,
 };
 
+// The CLI and optional socket server share this small tree model and the same
+// simulator file lock. Complex tree/process preservation belongs to the live
+// test; this model covers replacement beside a terminal-reused former sidebar.
+const FAKE_LAYOUT: &str = r#"
+import copy
+
+
+def live(pane):
+    return {key: pane[key] for key in
+            ('pane_id', 'terminal_id', 'workspace_id', 'tab_id', 'focused')}
+
+
+def leaf(pane_id):
+    return {'type': 'pane', 'pane_id': pane_id}
+
+
+def ids(node):
+    if node is None:
+        return []
+    if node['type'] == 'pane':
+        return [node['pane_id']]
+    return ids(node['first']) + ids(node['second'])
+
+
+def remove(node, pane_id):
+    if node is None or node['type'] == 'pane':
+        return None if node and node['pane_id'] == pane_id else node
+    first = remove(node['first'], pane_id)
+    second = remove(node['second'], pane_id)
+    if first is None or second is None:
+        return first or second
+    return dict(node, first=first, second=second)
+
+
+def insert(node, target, pane_id, direction, ratio):
+    if node['type'] == 'pane':
+        if node['pane_id'] != target:
+            return node
+        return {'type': 'split', 'direction': direction, 'ratio': ratio,
+                'first': node, 'second': leaf(pane_id)}
+    return dict(node, first=insert(node['first'], target, pane_id, direction, ratio),
+                second=insert(node['second'], target, pane_id, direction, ratio))
+
+
+def root_for(session, tab_id):
+    tab = session['tabs'][tab_id]
+    members = [p for p in session['panes'] if p['tab_id'] == tab_id]
+    root = tab.get('root')
+    for pane_id in ids(root):
+        if not any(p['pane_id'] == pane_id for p in members):
+            root = remove(root, pane_id)
+    for pane in members:
+        if pane['pane_id'] not in ids(root):
+            target = pane.get('source_pane_id')
+            root = (insert(root, target if target in ids(root) else ids(root)[0],
+                           pane['pane_id'], pane.get('direction', 'right'),
+                           pane.get('ratio', 0.5)) if root else leaf(pane['pane_id']))
+
+    def sync_ratios(node):
+        # Existing tests simulate a user resize by editing pane['ratio'].
+        if node is None or node['type'] == 'pane':
+            return
+        if node['second']['type'] == 'pane':
+            pane = next(p for p in members if p['pane_id'] == node['second']['pane_id'])
+            if pane.get('source_pane_id') in ids(node['first']):
+                node['ratio'] = pane.get('ratio', node['ratio'])
+        sync_ratios(node['first'])
+        sync_ratios(node['second'])
+
+    sync_ratios(root)
+    tab['root'] = root
+    return root
+
+
+def layout(session, pane_id):
+    pane = next(p for p in session['panes'] if p['pane_id'] == pane_id)
+    tab = session['tabs'][pane['tab_id']]
+    area = {'x': 0, 'y': 0, 'width': tab['width'], 'height': 30}
+    members = [p for p in session['panes'] if p['tab_id'] == pane['tab_id']]
+    focused = next((p['pane_id'] for p in members if p['focused']), pane_id)
+    result = {'workspace_id': pane['workspace_id'], 'tab_id': pane['tab_id'],
+              'area': area, 'focused_pane_id': focused,
+              'zoomed': tab.get('zoomed', False), 'panes': [], 'splits': []}
+
+    def visit(node, rect, path):
+        if node['type'] == 'pane':
+            result['panes'].append({'pane_id': node['pane_id'], 'rect': rect,
+                                   'focused': node['pane_id'] == focused})
+            return
+        result['splits'].append({'id': 'split-' + path, 'direction': node['direction'],
+                                 'ratio': node['ratio'], 'rect': rect.copy()})
+        axis = 'width' if node['direction'] == 'right' else 'height'
+        position = 'x' if node['direction'] == 'right' else 'y'
+        amount = round(rect[axis] * node['ratio'])
+        first, second = rect.copy(), rect.copy()
+        first[axis] = amount
+        second[axis] -= amount
+        second[position] += amount
+        visit(node['first'], first, path + '0')
+        visit(node['second'], second, path + '1')
+
+    visit(root_for(session, pane['tab_id']), area.copy(), '')
+    return result
+
+
+def export(session, params):
+    tab_id = params.get('tab_id')
+    if tab_id is None:
+        tab_id = next(p['tab_id'] for p in session['panes']
+                      if p['pane_id'] == params['pane_id'])
+    pane = next(p for p in session['panes'] if p['tab_id'] == tab_id)
+    snapshot = layout(session, pane['pane_id'])
+    return {'layout': {key: snapshot[key] for key in
+                       ('workspace_id', 'tab_id', 'focused_pane_id', 'zoomed')} |
+            {'root': copy.deepcopy(root_for(session, tab_id))}}
+
+
+def move(session, params):
+    assert params['focus'] is False, params
+    pane = next(p for p in session['panes'] if p['pane_id'] == params['pane_id'])
+    previous_tab = pane['tab_id']
+    previous_root = root_for(session, previous_tab)
+    destination = params['destination']
+    if session['tabs'][previous_tab].get('zoomed', False):
+        return {'move_result': {'changed': False, 'reason': 'zoomed_tab', 'pane': live(pane)}}
+    if destination['type'] == 'new_tab':
+        session['next_id'] += 1
+        tab_id = pane['workspace_id'] + ':tab-staging-' + str(session['next_id'])
+        session['tabs'][tab_id] = {'width': session['tabs'][previous_tab]['width'],
+                                   'root': None}
+        target = None
+    else:
+        assert destination['type'] == 'tab', destination
+        tab_id = destination['tab_id']
+        target = destination['target_pane_id']
+        root_for(session, tab_id)
+    if session['tabs'][tab_id].get('zoomed', False):
+        return {'move_result': {'changed': False, 'reason': 'zoomed_tab', 'pane': live(pane)}}
+    session['tabs'][previous_tab]['root'] = remove(previous_root, pane['pane_id'])
+    pane['tab_id'] = tab_id
+    if target is None:
+        pane.pop('source_pane_id', None)
+        session['tabs'][tab_id]['root'] = leaf(pane['pane_id'])
+    else:
+        assert target in ids(session['tabs'][tab_id]['root']), params
+        pane.update(source_pane_id=target, direction=destination['split'],
+                    ratio=destination['ratio'])
+        session['tabs'][tab_id]['root'] = insert(session['tabs'][tab_id]['root'],
+                                                target, pane['pane_id'],
+                                                destination['split'], destination['ratio'])
+    if not any(p['tab_id'] == previous_tab for p in session['panes']):
+        del session['tabs'][previous_tab]
+    return {'move_result': {'changed': True, 'reason': None, 'pane': live(pane)}}
+
+
+def rpc(session, method, params):
+    if method == 'layout.export':
+        return export(session, params)
+    if method == 'pane.layout':
+        return {'layout': layout(session, params['pane_id'])}
+    if method == 'pane.move':
+        fault = session.get('move_fault', {})
+        if fault.get('skip', 0) > 0:
+            fault['skip'] -= 1
+        elif fault.get('remaining', 0) != 0:
+            if fault['remaining'] > 0:
+                fault['remaining'] -= 1
+            if fault.get('mode') == 'unchanged':
+                pane = next(p for p in session['panes'] if p['pane_id'] == params['pane_id'])
+                return {'move_result': {'changed': False, 'reason': 'injected_refusal',
+                                        'pane': live(pane)}}
+            raise RuntimeError('injected pane.move error')
+        return move(session, params)
+    if method == 'layout.set_split_ratio':
+        node = root_for(session, params['tab_id'])
+        for index in params['path']:
+            node = node['first' if index == 0 else 'second']
+        assert node['type'] == 'split', params
+        node['ratio'] = params['ratio']
+        second = next(p for p in session['panes'] if p['pane_id'] == ids(node['second'])[0])
+        second['ratio'] = params['ratio']
+        return {'changed': True}
+    if method == 'workspace.get':
+        return {'workspace': session['workspaces'][params['workspace_id']]}
+    if method == 'pane.focus':
+        pane = next(p for p in session['panes'] if p['pane_id'] == params['pane_id'])
+        for member in session['panes']:
+            if member['tab_id'] == pane['tab_id']:
+                member['focused'] = member['pane_id'] == pane['pane_id']
+        return {'pane': live(pane)}
+    raise AssertionError('Unexpected Herdr RPC: ' + method)
+"#;
+
 // Model Herdr independently of the launcher's persistence format. Each socket
-// has its own live workspace/pane state, while all calls share a JSON call log.
+// has its own live workspace/pane state, while all calls share simulator JSON.
 const FAKE_HERDR: &str = r#"#!/usr/bin/env python3
 import copy
 import fcntl
@@ -19,6 +213,7 @@ import json
 import os
 import sys
 import time
+from fake_layout import layout, root_for
 
 args = sys.argv[1:]
 socket = os.environ['HERDR_SOCKET_PATH']
@@ -71,22 +266,7 @@ with open(os.environ['HGG_SIMULATOR'] + '.lock', 'a') as lock:
         result = {'tabs': [{'tab_id': tab, 'workspace_id': workspace}
                            for tab in session['tabs'] if tab.startswith(workspace + ':')]}
     elif args[:2] == ['pane', 'layout']:
-        pane = next(p for p in panes if p['pane_id'] == flag('--pane'))
-        total = session['tabs'][pane['tab_id']]['width']
-        sidebar = next((p for p in reversed(panes) if p.get('source_pane_id') and
-                        p['tab_id'] == pane['tab_id']), None)
-        area = {'x': 0, 'y': 0, 'width': total, 'height': 30}
-        if sidebar:
-            first = round(total * sidebar['ratio'])
-            layout = {'panes': [
-                {'pane_id': sidebar['source_pane_id'],
-                 'rect': {'x': 0, 'y': 0, 'width': first, 'height': 30}},
-                {'pane_id': sidebar['pane_id'],
-                 'rect': {'x': first, 'y': 0, 'width': total - first, 'height': 30}}],
-                'splits': [{'direction': 'right', 'ratio': sidebar['ratio'], 'rect': area}]}
-        else:
-            layout = {'panes': [{'pane_id': pane['pane_id'], 'rect': area}], 'splits': []}
-        result = {'layout': layout}
+        result = {'layout': layout(session, flag('--pane'))}
     elif args[:2] == ['pane', 'resize']:
         target = flag('--pane')
         sidebar = next(p for p in panes if p.get('source_pane_id') == target or
@@ -115,7 +295,14 @@ with open(os.environ['HGG_SIMULATOR'] + '.lock', 'a') as lock:
                 session['tabs'][source['tab_id']].get('zoomed', False)):
             result = {'move_result': {'changed': False, 'reason': 'zoomed_tab', 'pane': live(pane)}}
         else:
+            # Reconcile both trees before changing membership, then let the
+            # shared model prune/insert the moved leaf on its next read.
+            previous_tab = pane['tab_id']
+            root_for(session, previous_tab)
+            root_for(session, source['tab_id'])
             pane.update(tab_id=source['tab_id'], source_pane_id=source['pane_id'], ratio=ratio)
+            root_for(session, previous_tab)
+            root_for(session, source['tab_id'])
             result = {'move_result': {'changed': True, 'reason': None, 'pane': live(pane)}}
     else:
         raise AssertionError('Unexpected Herdr command: ' + repr(args))
@@ -125,17 +312,67 @@ with open(os.environ['HGG_SIMULATOR'] + '.lock', 'a') as lock:
     sys.exit(code)
 "#;
 
+// Match Herdr's one-request-per-connection JSON-lines protocol. Every request
+// takes the fake CLI's flock; injected failures must also persist their counters
+// and call log so a one-time error is actually consumed exactly once.
+const FAKE_RPC: &str = r#"
+import copy
+import fcntl
+import json
+import os
+import socket
+import sys
+
+path, simulator = sys.argv[1:]
+sys.path.insert(0, os.path.dirname(simulator))
+from fake_layout import rpc
+
+with socket.socket(socket.AF_UNIX) as listener:
+    listener.bind(path)
+    listener.listen()
+    print('READY', flush=True)
+    while True:
+        connection, _ = listener.accept()
+        with connection, connection.makefile('rb') as stream:
+            line = stream.readline()
+            if not line:
+                continue
+            request = json.loads(line)
+            with open(simulator + '.lock', 'a') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                with open(simulator) as file:
+                    state = json.load(file)
+                session = state['sessions'].setdefault(path, copy.deepcopy(state['seed']))
+                call = {'socket': path, 'method': request['method'], 'params': request['params']}
+                state.setdefault('rpc_calls', []).append(call)
+                try:
+                    result = rpc(session, request['method'], request['params'])
+                    response = {'id': request['id'], 'result': result}
+                except Exception as error:
+                    call['error'] = repr(error)
+                    response = {'id': request['id'], 'error': {
+                        'code': 'fake_rpc_error', 'message': repr(error)}}
+                with open(simulator, 'w') as file:
+                    json.dump(state, file)
+            connection.sendall((json.dumps(response) + '\n').encode())
+"#;
+
 struct Fixture {
     temp: tempfile::TempDir,
     repo: PathBuf,
     herdr: PathBuf,
     simulator: PathBuf,
     socket: PathBuf,
+    rpc_server: Option<Child>,
 }
 
 impl Fixture {
     fn new() -> Self {
-        let temp = tempfile::tempdir().unwrap();
+        // Unix socket paths have a small platform-dependent length limit.
+        let temp = tempfile::Builder::new()
+            .prefix("hgg-herdr-")
+            .tempdir_in("/tmp")
+            .unwrap();
         let repo = temp.path().join("repo with spaces");
         fs::create_dir(&repo).unwrap();
         assert!(
@@ -150,6 +387,7 @@ impl Fixture {
         let repo = fs::canonicalize(repo).unwrap();
         let herdr = temp.path().join("fake herdr");
         fs::write(&herdr, FAKE_HERDR).unwrap();
+        fs::write(temp.path().join("fake_layout.py"), FAKE_LAYOUT).unwrap();
         fs::set_permissions(&herdr, fs::Permissions::from_mode(0o755)).unwrap();
         let simulator = temp.path().join("simulator.json");
         let socket = temp.path().join("herdr.sock");
@@ -181,7 +419,56 @@ impl Fixture {
             herdr,
             simulator,
             socket,
+            rpc_server: None,
         }
+    }
+
+    fn with_rpc() -> Self {
+        let mut fixture = Self::new();
+        let mut server = Command::new("python3")
+            .args(["-u", "-c", FAKE_RPC])
+            .arg(&fixture.socket)
+            .arg(&fixture.simulator)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        BufReader::new(server.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        fixture.rpc_server = Some(server);
+        assert_eq!(ready.trim(), "READY", "fake socket server did not start");
+        fixture
+    }
+
+    fn with_work_panes() -> Self {
+        let fixture = Self::with_rpc();
+        fixture.update_session(|session| {
+            session["panes"].as_array_mut().unwrap().push(json!({
+                "pane_id": "w-test:p-second",
+                "terminal_id": "w-test:t-second",
+                "workspace_id": "w-test",
+                "tab_id": "w-test:tab-a",
+                "focused": false,
+                "source_pane_id": "w-test:p-source",
+                "ratio": 0.6
+            }));
+        });
+        fixture
+    }
+
+    fn simulator_lock(&self) -> fs::File {
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.simulator.with_extension("json.lock"))
+            .unwrap();
+        // Match Python fcntl.flock, including across CLI/server processes.
+        assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
+        lock
     }
 
     fn command_without_repo(&self, mode: &str) -> Command {
@@ -222,11 +509,13 @@ impl Fixture {
     }
 
     fn state(&self) -> Value {
+        let _lock = self.simulator_lock();
         serde_json::from_slice(&fs::read(&self.simulator).unwrap()).unwrap()
     }
 
     fn update_session(&self, update: impl FnOnce(&mut Value)) {
-        let mut state = self.state();
+        let _lock = self.simulator_lock();
+        let mut state: Value = serde_json::from_slice(&fs::read(&self.simulator).unwrap()).unwrap();
         update(&mut state["sessions"][self.socket.to_str().unwrap()]);
         fs::write(&self.simulator, serde_json::to_vec(&state).unwrap()).unwrap();
     }
@@ -253,6 +542,19 @@ impl Fixture {
             .collect()
     }
 
+    fn rpc_calls(&self, method: &str) -> Vec<Value> {
+        self.state()["rpc_calls"]
+            .as_array()
+            .map(|calls| {
+                calls
+                    .iter()
+                    .filter(|call| call["method"] == method)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn sidebar(&self, id: &str) -> Value {
         self.state()["sessions"][self.socket.to_str().unwrap()]["panes"]
             .as_array()
@@ -261,6 +563,15 @@ impl Fixture {
             .find(|pane| pane["pane_id"] == id)
             .unwrap()
             .clone()
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        if let Some(server) = &mut self.rpc_server {
+            let _ = server.kill();
+            let _ = server.wait();
+        }
     }
 }
 
@@ -331,7 +642,7 @@ fn launchers_preserve_repository_context_and_choose_the_correct_layout() {
         }
     }
     let layouts = fixture.calls(&["pane", "layout"]);
-    assert_eq!(layouts.len(), 2);
+    assert_eq!(layouts.len(), 3);
     let resizes = fixture.calls(&["pane", "resize"]);
     assert_eq!(resizes.len(), 1);
     assert_eq!(flag(&resizes[0], "--pane"), "w-test:p-source");
@@ -641,7 +952,7 @@ fn sidebar_toggle_close_failure_keeps_the_saved_sidebar() {
 
 #[test]
 fn sidebar_toggle_never_closes_a_reused_terminal_or_another_workspace() {
-    let fixture = Fixture::new();
+    let fixture = Fixture::with_rpc();
     let first = fixture.run("--open-sidebar");
     let id = pane(&first)["pane_id"].as_str().unwrap();
     fixture.update_session(|session| {
@@ -877,7 +1188,11 @@ fn constrained_moves_do_not_overwrite_the_users_preferred_width() {
 #[test]
 fn closed_or_terminal_reused_sidebar_records_are_cleared_without_respawning() {
     for terminal_reused in [false, true] {
-        let fixture = Fixture::new();
+        let fixture = if terminal_reused {
+            Fixture::with_rpc()
+        } else {
+            Fixture::new()
+        };
         let first = fixture.run("--open-sidebar");
         let id = pane(&first)["pane_id"].as_str().unwrap();
         fixture.update_session(|session| {
@@ -1111,7 +1426,11 @@ fn concurrent_close_and_focus_hooks_restore_exactly_one_sidebar() {
 #[test]
 fn explicit_open_recreates_a_closed_or_terminal_reused_sidebar() {
     for terminal_reused in [false, true] {
-        let fixture = Fixture::new();
+        let fixture = if terminal_reused {
+            Fixture::with_rpc()
+        } else {
+            Fixture::new()
+        };
         let first = fixture.run("--open-sidebar");
         let id = pane(&first)["pane_id"].as_str().unwrap();
         fixture.update_session(|session| {
@@ -1123,12 +1442,154 @@ fn explicit_open_recreates_a_closed_or_terminal_reused_sidebar() {
                 panes.retain(|p| p["pane_id"] != id);
             }
         });
+        let work_tree = fixture.state()["sessions"][fixture.socket.to_str().unwrap()]["tabs"]
+            ["w-test:tab-a"]["root"]
+            .clone();
         let replacement = fixture.run("--open-sidebar");
         assert_ne!(pane(&replacement)["pane_id"], pane(&first)["pane_id"]);
         assert_eq!(pane(&fixture.run("--open-sidebar")), pane(&replacement));
         assert_eq!(fixture.calls(&["plugin", "pane", "open"]).len(), 2);
+        // Same-tab reparenting uses socket pane.move, not CLI relocation.
         assert!(fixture.calls(&["pane", "move"]).is_empty());
+        if terminal_reused {
+            assert_eq!(fixture.sidebar(id)["terminal_id"], "unrelated-terminal");
+            let moves = fixture.rpc_calls("pane.move");
+            assert_eq!(moves.len(), 2, "stage and restore the unrelated work pane");
+            assert!(moves.iter().all(|call| call["params"]["pane_id"] == id));
+            assert_eq!(moves[0]["params"]["destination"]["type"], "new_tab");
+            assert_eq!(moves[1]["params"]["destination"]["tab_id"], "w-test:tab-a");
+            assert_eq!(fixture.rpc_calls("layout.set_split_ratio").len(), 1);
+            assert_eq!(fixture.rpc_calls("pane.focus").len(), 1);
+            let state = fixture.state();
+            let tabs = &state["sessions"][fixture.socket.to_str().unwrap()]["tabs"];
+            let wrapped = &tabs["w-test:tab-a"]["root"];
+            assert_eq!(wrapped["direction"], "right");
+            assert_eq!(wrapped["first"], work_tree);
+            assert_eq!(wrapped["second"]["pane_id"], pane(&replacement)["pane_id"]);
+            assert!(
+                tabs.as_object()
+                    .unwrap()
+                    .keys()
+                    .all(|tab| !tab.contains(":tab-staging-")),
+                "staging tab must disappear when its final pane returns"
+            );
+        } else {
+            assert!(fixture.rpc_calls("layout.export").is_empty());
+        }
     }
+}
+
+#[test]
+fn multi_pane_open_recovers_once_after_a_partial_rpc_move_failure() {
+    let fixture = Fixture::with_work_panes();
+    fixture.update_session(|session| {
+        // Stage the second work pane, then fail its first attempt to return.
+        session["move_fault"] = json!({"skip": 1, "remaining": 1, "mode": "error"});
+    });
+    let opened = fixture.run("--open-sidebar");
+    let graph = pane(&opened);
+    let moves = fixture.rpc_calls("pane.move");
+    assert_eq!(
+        moves.len(),
+        4,
+        "initial stage/error, then one stage/restore recovery"
+    );
+    assert_eq!(
+        moves
+            .iter()
+            .filter(|call| call["error"].is_string())
+            .count(),
+        1
+    );
+    assert_eq!(fixture.calls(&["plugin", "pane", "open"]).len(), 1);
+    assert!(fixture.calls(&["pane", "close"]).is_empty());
+    for (id, terminal) in [
+        ("w-test:p-source", "w-test:t-source"),
+        ("w-test:p-second", "w-test:t-second"),
+    ] {
+        let work = fixture.sidebar(id);
+        assert_eq!(work["terminal_id"], terminal);
+        assert_eq!(work["tab_id"], "w-test:tab-a");
+    }
+    let state = fixture.state();
+    let session = &state["sessions"][fixture.socket.to_str().unwrap()];
+    let root = &session["tabs"]["w-test:tab-a"]["root"];
+    assert_eq!(root["direction"], "right");
+    assert_eq!(root["second"]["pane_id"], graph["pane_id"]);
+    assert_eq!(
+        root["first"],
+        json!({"type": "split", "direction": "right", "ratio": 0.6,
+               "first": {"type": "pane", "pane_id": "w-test:p-source"},
+               "second": {"type": "pane", "pane_id": "w-test:p-second"}})
+    );
+    assert_eq!(session["move_fault"]["remaining"], 0);
+    assert!(
+        session["tabs"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|tab| !tab.contains(":tab-staging-"))
+    );
+    assert_eq!(fixture.sidebar("w-test:p-source")["focused"], true);
+    assert_eq!(
+        pane(&fixture.run("--open-sidebar"))["pane_id"],
+        graph["pane_id"]
+    );
+    assert_eq!(fixture.calls(&["plugin", "pane", "open"]).len(), 1);
+    assert_eq!(fixture.rpc_calls("pane.move").len(), 4);
+}
+
+#[test]
+fn permanent_rpc_move_refusal_keeps_user_panes_and_the_registered_viewer() {
+    let fixture = Fixture::with_work_panes();
+    fixture.update_session(|session| {
+        session["move_fault"] = json!({"skip": 1, "remaining": -1, "mode": "unchanged"});
+    });
+    let failed = fixture.command("--open-sidebar").output().unwrap();
+    assert!(!failed.status.success());
+    assert!(failed.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&failed.stderr);
+    assert!(stderr.contains("복구 실패"), "{stderr}");
+    assert!(stderr.contains("Git Graph layout"), "{stderr}");
+    assert!(stderr.contains("닫지 않았습니다"), "{stderr}");
+    assert_eq!(
+        fixture.rpc_calls("pane.move").len(),
+        3,
+        "initial stage/refusal, then exactly one refused recovery"
+    );
+    for (id, terminal) in [
+        ("w-test:p-source", "w-test:t-source"),
+        ("w-test:p-second", "w-test:t-second"),
+    ] {
+        assert_eq!(fixture.sidebar(id)["terminal_id"], terminal);
+    }
+    assert!(
+        fixture.sidebar("w-test:p-second")["tab_id"]
+            .as_str()
+            .unwrap()
+            .contains(":tab-staging-")
+    );
+    assert!(fixture.calls(&["pane", "close"]).is_empty());
+    assert!(fixture.rpc_calls("pane.close").is_empty());
+    let state = fixture.state();
+    let graphs: Vec<_> = state["sessions"][fixture.socket.to_str().unwrap()]["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|pane| pane["entrypoint"] == "sidebar")
+        .collect();
+    assert_eq!(graphs.len(), 1);
+    // The graph was registered before placement failed. Another action must
+    // reuse it, not spawn another viewer or close the stranded work pane.
+    let reused = fixture.run("--open-sidebar");
+    assert_eq!(pane(&reused)["pane_id"], graphs[0]["pane_id"]);
+    assert_eq!(pane(&reused)["terminal_id"], graphs[0]["terminal_id"]);
+    assert_eq!(fixture.calls(&["plugin", "pane", "open"]).len(), 1);
+    assert_eq!(fixture.rpc_calls("pane.move").len(), 3);
+    assert_eq!(
+        fixture.sidebar("w-test:p-second")["terminal_id"],
+        "w-test:t-second"
+    );
 }
 
 #[test]

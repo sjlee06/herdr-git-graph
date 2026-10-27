@@ -44,4 +44,5 @@ jobs:
             chmod +x "$directory/herdr"
             "$directory/herdr" --version
             PATH="$directory:$PATH" python3 tests/herdr_live.py
+            PATH="$directory:$PATH" python3 tests/sidebar_layout_live.py bin/herdr-git-graph
           done

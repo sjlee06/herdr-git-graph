@@ -1,3 +1,4 @@
+mod layout;
 mod sidebar;
 mod view_state;
 
@@ -74,7 +75,7 @@ pub fn open_pane(root: &Path, theme: crate::theme::ThemeMode) -> Result<()> {
 
 fn open_view(
     root: &Path,
-    source_pane: Option<(&str, u16)>,
+    source_pane: Option<&str>,
     theme: crate::theme::ThemeMode,
 ) -> Result<Vec<u8>> {
     use clap::ValueEnum;
@@ -104,7 +105,7 @@ fn open_view(
             "HERDR_GIT_GRAPH_THEME={}",
             theme.to_possible_value().unwrap().get_name()
         ));
-    if let Some((id, _)) = source_pane {
+    if let Some(id) = source_pane {
         command.args(["--env", "HERDR_GIT_GRAPH_SHARED=1"]);
         // Split placement accepts a target pane, but rejects workspace_id.
         // Recovery uses live focus, not the closed tab's invocation context.
@@ -120,21 +121,6 @@ fn open_view(
         .context("Herdr를 실행할 수 없습니다.")?;
     if !output.status.success() {
         bail!("Herdr Git Graph 패널을 열지 못했습니다. 플러그인 등록을 확인하세요.");
-    }
-    if let Some((source, width)) = source_pane {
-        // Herdr 0.9 has no width/ratio option on plugin pane open. Resize the
-        // newly created split once, without changing the caller's focus.
-        let resize = || -> Result<()> {
-            let opened: Value = serde_json::from_slice(&output.stdout)?;
-            let pane = opened
-                .pointer("/result/plugin_pane/pane/pane_id")
-                .and_then(Value::as_str)
-                .context("새 패널 ID가 없습니다.")?;
-            size_sidebar(&bin, source, pane, width)
-        };
-        if let Err(error) = resize() {
-            eprintln!("사이드바는 열렸지만 초기 너비를 맞추지 못했습니다: {error}");
-        }
     }
     Ok(output.stdout)
 }

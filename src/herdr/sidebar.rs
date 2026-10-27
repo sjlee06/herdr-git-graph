@@ -1,4 +1,4 @@
-use super::{SIDEBAR_WIDTH, context_id, open_view, plugin_context};
+use super::{SIDEBAR_WIDTH, context_id, layout::Layout, open_view, plugin_context, size_sidebar};
 use crate::theme::ThemeMode;
 use anyhow::{Context, Result, ensure};
 use clap::ValueEnum;
@@ -218,7 +218,7 @@ fn string<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
         .with_context(|| format!("Herdr 응답에 {key} 값이 없습니다."))
 }
 
-fn request(bin: &OsStr, args: &[&str]) -> Result<Value> {
+pub(super) fn request(bin: &OsStr, args: &[&str]) -> Result<Value> {
     let output = Command::new(bin).args(args).output()?;
     ensure!(
         output.status.success(),
@@ -261,13 +261,23 @@ fn create_sidebar(
     record["theme"] = json!(theme.to_possible_value().unwrap().get_name());
     let width = preferred_width(&record);
     record["width"] = json!(width);
-    let output = open_view(root, Some((source, width)), theme)?;
+    let bin = env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
+    let mut layout = Layout::capture(&bin, source, None)?;
+    let anchor = layout.as_ref().map_or(source, Layout::anchor);
+    let output = open_view(root, Some(anchor), theme)?;
     let response: Value = serde_json::from_slice(&output)?;
     let pane = response
         .pointer("/result/plugin_pane/pane")
         .context("새 사이드바 패널 정보가 없습니다.")?;
-    let bin = env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
-    record["actual_width"] = json!(pane_width(&bin, string(pane, "pane_id")?)?);
+    // Keep the new viewer recoverable even if a host error interrupts staging.
+    state.save(pane, &record)?;
+    let pane_id = string(pane, "pane_id")?;
+    if let Some(layout) = &mut layout {
+        layout.place(pane_id, width)?;
+    } else if let Err(error) = size_sidebar(&bin, source, pane_id, width) {
+        eprintln!("사이드바는 열렸지만 초기 너비를 맞추지 못했습니다: {error}");
+    }
+    record["actual_width"] = json!(pane_width(&bin, pane_id)?);
     state.save(pane, &record)?;
     Ok(output)
 }
@@ -467,8 +477,22 @@ fn relocate_sidebar(
     previous: &Value,
 ) -> Result<Value> {
     let mut record = previous.clone();
-    remember_width(&mut record, pane_width(bin, string(pane, "pane_id")?)?);
-    let moved = move_sidebar(bin, pane, target, preferred_width(&record))?;
+    let pane_id = string(pane, "pane_id")?;
+    remember_width(&mut record, pane_width(bin, pane_id)?);
+    let mut layout = Layout::capture(
+        bin,
+        string(target, "pane_id")?,
+        (pane["tab_id"] == target["tab_id"]).then_some(pane_id),
+    )?;
+    let mut target = target.clone();
+    if let Some(layout) = &layout {
+        target["pane_id"] = json!(layout.anchor());
+    }
+    let moved = move_sidebar(bin, pane, &target, preferred_width(&record))?;
+    state.save(&moved, &record)?;
+    if let Some(layout) = &mut layout {
+        layout.place(pane_id, preferred_width(&record))?;
+    }
     record["actual_width"] = json!(pane_width(bin, string(&moved, "pane_id")?)?);
     state.save(&moved, &record)?;
     Ok(moved)

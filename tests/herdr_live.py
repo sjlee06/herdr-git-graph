@@ -125,6 +125,18 @@ def verify(base, herdr):
         return next(item["rect"]["width"] for item in snapshot["panes"]
                     if item["pane_id"] == pane)
 
+    def assert_outer_sidebar(snapshot, sidebar):
+        area = snapshot["area"]
+        rect = next(item["rect"] for item in snapshot["panes"]
+                    if item["pane_id"] == sidebar)
+        assert rect["y"] == area["y"] and rect["height"] == area["height"], snapshot
+        assert rect["x"] + rect["width"] == area["x"] + area["width"], snapshot
+        assert all(item["pane_id"] == sidebar or
+                   item["rect"]["x"] + item["rect"]["width"] <= rect["x"]
+                   for item in snapshot["panes"]), snapshot
+        assert any(split["direction"] == "right" and split["rect"] == area
+                   for split in snapshot["splits"]), snapshot
+
     def read_graph(pane):
         screen = run("pane", "read", pane, "--source", "visible", "--raw").stdout
         # Some Herdr versions include SGR even without --ansi. Strip it for
@@ -145,7 +157,8 @@ def verify(base, herdr):
             return ((str(selected + 1), count.group(1)), subjects)
         return None
 
-    def shared_at(sidebar, workspace, tab, source, ordinary, remembered_width=None):
+    def shared_at(sidebar, workspace, tab, source, ordinary, remembered_width=None,
+                  tab_panes=None):
         def snapshot():
             members = panes(workspace)
             # Terminal identity also makes a failure diagnostic if Herdr ever
@@ -167,8 +180,9 @@ def verify(base, herdr):
         assert current["workspace_id"] == workspace, current
         assert not current["focused"], current
         assert {pane["pane_id"] for pane in members} == ordinary | {sidebar["pane_id"]}, members
-        assert {pane["pane_id"] for pane in current_layout["panes"]} == {
-            source, sidebar["pane_id"]}, current_layout
+        assert {pane["pane_id"] for pane in current_layout["panes"]} == \
+            (tab_panes if tab_panes is not None else {source}) | {sidebar["pane_id"]}, current_layout
+        assert_outer_sidebar(current_layout, sidebar["pane_id"])
         return current_layout
 
     def create_tab(workspace, label, cwd):
@@ -463,28 +477,39 @@ def verify(base, herdr):
             focus_tabs(next_tab, recovery_tab, next_tab)
             shared_at(restored, recovery_workspace, next_tab, next_source,
                       {recovery_source, next_source}, recovery_width)
-            # Constrain the focused target pane to 40 columns. A narrow tab
-            # may clamp the actual split, but must not overwrite the preference.
-            narrow_tab, narrow_source = create_tab(recovery_workspace, "Narrow destination", base)
-            total = width(layout(narrow_source), narrow_source)
-            data("pane", "split", "--pane", narrow_source, "--direction", "right",
-                 "--ratio", str(40 / total), "--cwd", str(base), "--no-focus")
-            focus_tabs(narrow_tab)
-            narrow_actual = width(layout(restored["pane_id"]), restored["pane_id"])
-            assert narrow_actual < recovery_width, (narrow_actual, recovery_width)
-            wait_for("temporary clamp retains preferred width", lambda: saved_view(restored),
-                     lambda record: record.get("actual_width") == narrow_actual
+            # Narrow only the focused leaf, not the tab viewport. Headless tabs
+            # retain their full width (currently 120 columns), so a nested split
+            # cannot exercise a real viewport clamp. Clamp cases remain covered
+            # by the Rust simulator; here the root sidebar must ignore leaf width.
+            nested_tab, nested_source = create_tab(recovery_workspace, "Narrow-leaf destination", base)
+            total = width(layout(nested_source), nested_source)
+            split = data("pane", "split", "--pane", nested_source, "--direction", "right",
+                         "--ratio", str(40 / total), "--cwd", str(base), "--no-focus")
+            nested_peer = split["pane"]["pane_id"]
+            nested_panes = {nested_source, nested_peer}
+            assert width(layout(nested_source), nested_source) == 40
+            recovery_ordinary = {recovery_source, next_source} | nested_panes
+            focus_tabs(nested_tab)
+            nested_layout = shared_at(restored, recovery_workspace, nested_tab, nested_source,
+                                      recovery_ordinary, recovery_width, tab_panes=nested_panes)
+            assert nested_layout["area"]["width"] == total, nested_layout
+            assert width(nested_layout, nested_source) < recovery_width, nested_layout
+            assert width(nested_layout, restored["pane_id"]) == recovery_width, nested_layout
+            wait_for("narrow leaf leaves preferred and actual sidebar width unchanged",
+                     lambda: saved_view(restored),
+                     lambda record: record.get("actual_width") == recovery_width
                                    and record.get("width") == recovery_width)
             focus_tabs(next_tab)
             shared_at(restored, recovery_workspace, next_tab, next_source,
-                      {recovery_source, next_source} | {pane["pane_id"] for pane in panes(recovery_workspace)
-                       if pane["tab_id"] == narrow_tab}, recovery_width)
-            # Delete the narrow tab while it contains the sidebar, too: the
-            # replacement must use the preference, not the clamped actual size.
-            focus_tabs(narrow_tab)
+                      recovery_ordinary, recovery_width)
+            # Delete the nested tab while it contains the sidebar. Its replacement
+            # must retain preferred width, selection/search, and root placement.
+            focus_tabs(nested_tab)
+            shared_at(restored, recovery_workspace, nested_tab, nested_source,
+                      recovery_ordinary, recovery_width, tab_panes=nested_panes)
             old_terminal = restored["terminal_id"]
             previous = {item["log_id"] for item in logs()}
-            run("tab", "close", narrow_tab)
+            run("tab", "close", nested_tab)
             hooks_since(previous, event="tab.closed")
             graphs = [pane for pane in panes(recovery_workspace)
                       if pane.get("label") == "Git Graph Sidebar"]
@@ -493,7 +518,7 @@ def verify(base, herdr):
             assert restored["terminal_id"] != old_terminal, restored
             shared_at(restored, recovery_workspace, next_tab, next_source,
                       {recovery_source, next_source}, recovery_width)
-            wait_for("view survives closing a constrained tab", lambda: saved_view(restored),
+            wait_for("view survives closing a nested-pane tab", lambda: saved_view(restored),
                      lambda record: record.get("view", {}).get("selected_oid") ==
                                     before_close["view"]["selected_oid"]
                                     and record["view"].get("query") == "History")
@@ -541,7 +566,7 @@ def verify(base, herdr):
             assert data("pane", "get", other_sidebar["pane_id"])["pane"]["terminal_id"] == \
                 other_sidebar["terminal_id"]
             # Toggle width preferences outlive the active pane registration.
-            # A constrained reopen must not replace the preferred wide size.
+            # Reopening beside a narrow leaf must still use the entire tab width.
             toggle_workspace = data("workspace", "create", "--cwd", str(repo),
                                     "--label", "Toggle width", "--focus")
             toggle_workspace_id = toggle_workspace["workspace"]["workspace_id"]
@@ -559,16 +584,26 @@ def verify(base, herdr):
             shared_at(graph, toggle_workspace_id, wide_tab, wide_source, {wide_source}, preferred)
             invoke_result("toggle-sidebar")
 
-            constrained_tab, constrained_source = create_tab(toggle_workspace_id,
-                                                              "Constrained toggle", repo)
-            total = width(layout(constrained_source), constrained_source)
-            data("pane", "split", "--pane", constrained_source, "--direction", "right",
-                 "--ratio", str(40 / total), "--cwd", str(repo), "--no-focus")
-            focus_tabs(constrained_tab)
+            leaf_tab, leaf_source = create_tab(toggle_workspace_id, "Narrow-leaf toggle", repo)
+            total = width(layout(leaf_source), leaf_source)
+            split = data("pane", "split", "--pane", leaf_source, "--direction", "right",
+                         "--ratio", str(40 / total), "--cwd", str(repo), "--no-focus")
+            leaf_panes = {leaf_source, split["pane"]["pane_id"]}
+            assert width(layout(leaf_source), leaf_source) == 40
+            focus_tabs(leaf_tab)
             ordinary = {pane["pane_id"] for pane in panes(toggle_workspace_id)}
             graph = invoke("toggle-sidebar")
-            assert width(layout(graph["pane_id"]), graph["pane_id"]) < preferred
+            leaf_layout = shared_at(graph, toggle_workspace_id, leaf_tab, leaf_source,
+                                    ordinary, preferred, tab_panes=leaf_panes)
+            assert leaf_layout["area"]["width"] == total, leaf_layout
+            assert width(leaf_layout, leaf_source) < preferred, leaf_layout
+            assert width(leaf_layout, graph["pane_id"]) == preferred, leaf_layout
+            wait_for("toggle reopen retains preferred width beside a narrow leaf",
+                     lambda: saved_view(graph),
+                     lambda record: record.get("actual_width") == preferred
+                                   and record.get("width") == preferred)
             invoke_result("toggle-sidebar")
+            assert {pane["pane_id"] for pane in layout(leaf_source)["panes"]} == leaf_panes
             focus_tabs(wide_tab)
             assert {pane["pane_id"] for pane in panes(toggle_workspace_id)} == ordinary
             graph = invoke("toggle-sidebar")
@@ -576,12 +611,12 @@ def verify(base, herdr):
             assert data("pane", "get", other_sidebar["pane_id"])["pane"]["terminal_id"] == \
                 other_sidebar["terminal_id"]
             print("PASS: isolated Herdr shared sidebar; toggle open/close/reopen and hook opt-out; "
-                  "last toggle width persists, including constrained-to-wide reopen; "
+                  "last toggle width persists across narrow-leaf and single-pane reopen; "
                   "repeated/non-Git actions; tab moves/back/rapid focus; "
                   "stable pane/terminal, selection/scroll, manual width and source focus; "
                   "independent workspace; q/manual close opt-out; full-view action; "
                   "zoom failure/recovery; containing-tab close restores view/search/width to non-Git tab; "
-                  "narrow-to-wide preferred-width recovery; "
+                  "narrow-leaf moves/recovery retain preferred width and full-height root-right placement; "
                   "q/manual opt-out followed by tab close; last-tab close; OSC theme")
         finally:
             # All commands use the test session and isolated XDG paths.
