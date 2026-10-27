@@ -348,16 +348,26 @@ impl App {
     }
 
     pub fn scroll_history_to(&mut self, position: usize) {
-        let mut remaining = position.min(
+        let position = position.min(
             self.history_total_rows()
                 .saturating_sub(usize::from(self.history_area.height)),
         );
-        self.top = 0;
-        while self.top < self.repo.commits.len() && remaining >= self.history_row_height(self.top) {
-            remaining -= self.history_row_height(self.top);
-            self.top += 1;
+        let mut commit_rows = position;
+        if let Some(selected) = self.selected {
+            let start = selected * 2;
+            let extra = self.expanded_file_rows();
+            if position >= start + 2 && position < start + 2 + extra {
+                self.top = selected;
+                self.top_offset = position - start;
+                return;
+            }
+            if position >= start + 2 + extra {
+                commit_rows -= extra;
+            }
         }
-        self.top_offset = remaining;
+        // All commits have two rows except the one expanded file list.
+        self.top = commit_rows / 2;
+        self.top_offset = commit_rows % 2;
     }
 
     fn keep_selection_visible(&mut self) {
@@ -1443,6 +1453,43 @@ mod tests {
             },
             None,
         );
+    }
+
+    #[test]
+    fn history_coordinates_match_row_heights_at_every_expansion_boundary() {
+        let mut app = App::new(git::demo(), 2000, true).with_sidebar(true);
+        for sidebar in [true, false] {
+            app.sidebar = sidebar;
+            for selected in std::iter::once(None).chain((0..app.repo.commits.len()).map(Some)) {
+                app.selected = selected;
+                for files in [None, Some(0), Some(1), Some(3), Some(80)] {
+                    app.files =
+                        files.map(|count| Ok(vec![git::demo_changed_files()[0].clone(); count]));
+                    for height in [0, 1, 2, 6, 200] {
+                        app.history_area.height = height;
+                        let total = app.history_total_rows();
+                        for position in (0..total + 3).chain(std::iter::once(usize::MAX)) {
+                            let target = position.min(total.saturating_sub(height as usize));
+                            let mut remaining = target;
+                            let mut top = 0;
+                            while top < app.repo.commits.len()
+                                && remaining >= app.history_row_height(top)
+                            {
+                                remaining -= app.history_row_height(top);
+                                top += 1;
+                            }
+                            app.scroll_history_to(position);
+                            assert_eq!((app.top, app.top_offset), (top, remaining));
+                            assert_eq!(app.history_scroll_position(), target);
+                        }
+                    }
+                }
+            }
+        }
+        app.repo.commits.clear();
+        app.selected = None;
+        app.scroll_history_to(usize::MAX);
+        assert_eq!((app.top, app.top_offset), (0, 0));
     }
 
     #[test]

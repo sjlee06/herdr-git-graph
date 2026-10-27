@@ -7,7 +7,7 @@ use std::{
     collections::hash_map::DefaultHasher,
     env,
     ffi::OsStr,
-    fs::{self, File, OpenOptions},
+    fs::{self, File, OpenOptions, TryLockError},
     hash::{Hash, Hasher},
     io::Write,
     path::{Path, PathBuf},
@@ -24,7 +24,7 @@ struct SidebarState {
 }
 
 impl SidebarState {
-    fn lock(workspace: &str) -> Result<Self> {
+    fn open(workspace: &str) -> Result<Self> {
         let directory = env::var_os("HERDR_PLUGIN_STATE_DIR")
             .map(PathBuf::from)
             .or_else(|| {
@@ -46,11 +46,25 @@ impl SidebarState {
             .read(true)
             .write(true)
             .open(base.with_extension("lock"))?;
-        lock.lock()?;
         Ok(Self {
             _lock: lock,
             path: base.with_extension("json"),
         })
+    }
+
+    fn lock(workspace: &str) -> Result<Self> {
+        let state = Self::open(workspace)?;
+        state._lock.lock()?;
+        Ok(state)
+    }
+
+    fn try_lock(workspace: &str) -> Result<Option<Self>> {
+        let state = Self::open(workspace)?;
+        match state._lock.try_lock() {
+            Ok(()) => Ok(Some(state)),
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Error(error)) => Err(error.into()),
+        }
     }
 
     fn read(&self) -> Result<Option<Value>> {
@@ -117,6 +131,7 @@ pub struct SidebarSession {
     workspace: String,
     pane: String,
     snapshot: Value,
+    snapshot_due: Instant,
     geometry_due: Instant,
 }
 
@@ -139,19 +154,28 @@ impl SidebarSession {
             workspace,
             pane,
             snapshot: Value::Null,
+            snapshot_due: Instant::now(),
             geometry_due: Instant::now(),
         }))
     }
 
-    pub fn update(&mut self, app: &crate::app::App, resized: bool) -> Result<()> {
+    pub fn update(&mut self, app: &crate::app::App, resized: bool, flush: bool) -> Result<()> {
+        let now = Instant::now();
+        // Save the latest view periodically during scrolling, then flush on
+        // idle or non-wheel input. Do not launch geometry RPCs for wheel frames.
+        let geometry_due = resized || (flush && now >= self.geometry_due);
+        if !flush && now < self.snapshot_due && !geometry_due {
+            return Ok(());
+        }
         let snapshot = super::view_state::snapshot(app);
-        // Headless Herdr can change logical split geometry without resizing
-        // the PTY. Check occasionally as well as on terminal resize events.
-        let geometry_due = resized || Instant::now() >= self.geometry_due;
         if self.snapshot == snapshot && !geometry_due {
             return Ok(());
         }
-        let state = SidebarState::lock(&self.workspace)?;
+        // A tab/focus hook can hold this lock while waiting for Herdr. Retry on
+        // the next loop instead of stopping input and painting behind the hook.
+        let Some(state) = SidebarState::try_lock(&self.workspace)? else {
+            return Ok(());
+        };
         if let Some(mut record) = state.read()?
             && record["pane_id"] == self.pane
         {
@@ -168,6 +192,7 @@ impl SidebarSession {
             }
         }
         self.snapshot = snapshot;
+        self.snapshot_due = Instant::now() + Duration::from_millis(250);
         if geometry_due {
             self.geometry_due = Instant::now() + Duration::from_secs(1);
         }

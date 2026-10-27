@@ -20,6 +20,7 @@ jobs:
       - run: cargo test --locked
       - run: sh scripts/build.sh
       - run: ./bin/herdr-git-graph --demo --check
+      - run: python3 tests/scroll_pty.py bin/herdr-git-graph
       - name: Check minimum and current Herdr compatibility
         shell: bash
         run: |

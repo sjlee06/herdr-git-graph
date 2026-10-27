@@ -74,10 +74,12 @@ herdr plugin install sjlee06/herdr-git-graph
 
 ## Checks
 
-The launcher regression tests use `python3` to simulate Herdr; Python is not required to run the plugin.
+The launcher regression tests use `python3` to simulate Herdr; Python is not required to run the plugin. `tests/scroll_pty.py` runs the viewer on an isolated controlling PTY with 2,400 commits and no Herdr server. It checks bounded curve uploads during wheel bursts, direction changes and boundary clamping, clicks and keys behind pending scroll frames, resize, terminal cleanup, OSC theme replies, and responsiveness while a hook holds the shared-state lock. Pass a binary path to check a release build: `python3 tests/scroll_pty.py target/release/herdr-git-graph`.
 
 ```bash
 python3 tests/install.py
+cargo build --locked
+python3 tests/scroll_pty.py
 cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
@@ -133,6 +135,7 @@ After regeneration, check that default sidebars have no selection highlight, exp
 | File | Responsibility |
 | --- | --- |
 | `src/main.rs` | CLI, terminal lifecycle, input loop |
+| `src/input.rs` | Wheel-frame scheduling and input wait deadlines |
 | `src/app.rs` | View state, search, background Git requests |
 | `src/git.rs` | Bounded Git subprocesses, log/ref parsing, diffs |
 | `src/graph.rs` | Lane assignment from parent commit IDs |
@@ -152,11 +155,11 @@ The shared-sidebar registry uses hashed `.json` and `.lock` filenames under `$HE
 
 `width` is the target outer width, initially 40 columns; `actual_width` tracks the constrained geometry. Initial sizing and moves use Herdr's 10–90% split-ratio limits, without a separate half-target-pane cap. A move or recreation saves its constrained actual width without replacing the target, so a narrow destination does not prevent width restoration on a wider tab. Later user/host geometry changes update the target. `view` stores `selected_oid` and `top_oid` with `selected` and `top` index fallbacks, plus `graph_offset`, `query`, and `searching`. Restoration finds the saved OIDs in the newly loaded history, falls back to clamped indices, and bounds the horizontal offset. `ui::draw` adjusts selection visibility for the new terminal height; sidebar state does not include branch filters or detail panels.
 
-Action-managed viewers receive the internal `HERDR_GIT_GRAPH_SHARED=1` marker and use `SidebarSession` to restore and save the matching record. Direct pane opens and standalone `--sidebar` runs do not participate. The viewer saves after the initial draw and when persisted UI state changes. It checks Herdr geometry on terminal resize and once per second, including logical layout changes without a PTY resize, and does not rewrite unchanged records. Viewers already running an older binary must be closed and reopened to enable this persistence.
+Action-managed viewers receive the internal `HERDR_GIT_GRAPH_SHARED=1` marker and use `SidebarSession` to restore and save the matching record. Direct pane opens and standalone `--sidebar` runs do not participate. The viewer saves the initial view and changed UI state. During wheel scrolling, it saves at most once per 250 ms, then flushes on idle or non-wheel actions. A busy shared-state lock defers the save instead of blocking input. It checks Herdr geometry on terminal resize and once per second while not scrolling, including logical layout changes without a PTY resize, and does not rewrite unchanged records. Viewers already running an older binary must be closed and reopened to enable this persistence.
 
 Pane and terminal IDs are checked against live panes before reuse. When a pane is missing but its tab remains, synchronization clears the record without reopening. When the containing tab has been deleted and a valid destination remains in the same workspace, it creates one new process on the focused workspace's active tab using the saved launch settings, view, and target width. This is not server-restart/session recovery; pane/terminal identity guards reject stale reused IDs. `tab.closed` hooks also run synchronization because closing a tab need not emit a focus event. `pane.closed` and `pane.exited` hooks clear matching records for explicit opt-out, and the viewer clears its record before an explicit quit; delayed events for old panes do not clear replacements. Removed workspaces and legacy records without recovery settings are cleared, not restored. Missing newer view/width fields use safe defaults. Recreation can briefly change the layout, and cross-tab moves remain subject to Herdr's zoom restrictions; the plugin does not automatically unzoom tabs.
 
-Graph layout is separate from rendering. Keep parent relationships intact across branch filtering and commit limits, and retain terminal cleanup and text fallback when changing rendering code.
+Graph layout is separate from rendering. Wheel events are applied in order, including direction changes and per-event boundary clamping, while drawing is grouped into 16 ms scroll frames. A following click, key, or resize flushes the pending frame first so input uses the current viewport. Keep parent relationships intact across branch filtering and commit limits, and retain terminal cleanup and text fallback when changing rendering code.
 
 ## Contributing
 

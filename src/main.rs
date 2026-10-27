@@ -17,9 +17,10 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
+mod input;
 mod terminal;
 
 #[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
@@ -201,6 +202,8 @@ fn main() -> Result<()> {
     let palette_deadline = std::time::Instant::now() + Duration::from_millis(700);
     let mut palette_fallback_reported = false;
     let mut dirty = true;
+    let mut scroll_frames = input::ScrollFrames::default();
+    let mut pending_input = None;
     let mut terminal_size = crossterm::terminal::size()?;
     while !app.quit && !stop.load(Ordering::Relaxed) {
         // A resize can precede Crossterm's SIGWINCH registration during startup.
@@ -209,6 +212,11 @@ fn main() -> Result<()> {
         let mut resized = size != terminal_size;
         terminal_size = size;
         dirty |= resized;
+        if resized {
+            // Update hit areas before another wheel, even if SIGWINCH's
+            // queued Resize event has not reached the input reader yet.
+            scroll_frames.flush(Instant::now());
+        }
         if args.renderer != Renderer::Text && !graphics_attempted && app.theme.supports_curves() {
             graphics_attempted = true;
             match Surface::connect() {
@@ -242,15 +250,12 @@ fn main() -> Result<()> {
             app.request_detail(worker);
             app.request_refresh(worker);
         }
-        if dirty {
+        if dirty && scroll_frames.ready(Instant::now()) {
             let mut viewport = None;
             terminal.draw(|frame| {
                 viewport = ui::draw(frame, &mut app, surface.is_some());
             })?;
             dirty = false;
-            if let Some(shared) = &mut sidebar_session {
-                shared.update(&app, resized)?;
-            }
             if let Some(graphics) = &mut surface {
                 let result = if let Some(view) = viewport {
                     graphics.paint(&app.graph, view, app.theme)
@@ -265,12 +270,16 @@ fn main() -> Result<()> {
                     dirty = true;
                 }
             }
+            scroll_frames.rendered();
         }
         let previous_theme = app.theme;
-        let input = if let Some(probe) = &mut probe {
-            probe.read(Duration::from_millis(40), &mut app.theme)
+        let timeout = scroll_frames.timeout(Instant::now());
+        let input = if let Some(input) = pending_input.take() {
+            Ok(Some(input))
+        } else if let Some(probe) = &mut probe {
+            probe.read(timeout, &mut app.theme)
         } else {
-            event::poll(Duration::from_millis(40)).and_then(|ready| {
+            event::poll(timeout).and_then(|ready| {
                 if ready {
                     event::read().map(Some)
                 } else {
@@ -287,6 +296,27 @@ fn main() -> Result<()> {
         };
         dirty |= previous_theme != app.theme;
         if let Some(input) = input {
+            let wheel = matches!(
+                input,
+                Event::Mouse(event)
+                    if matches!(
+                        event.kind,
+                        event::MouseEventKind::ScrollUp | event::MouseEventKind::ScrollDown
+                    )
+            );
+            let needs_current_view = match input {
+                Event::Key(key) => key.kind != KeyEventKind::Release,
+                Event::Mouse(mouse) => matches!(mouse.kind, event::MouseEventKind::Down(_)),
+                Event::Resize(_, _) => true,
+                _ => false,
+            };
+            if scroll_frames.pending() && needs_current_view {
+                // A click must use the hit map for the scrolled viewport, not
+                // the last painted frame. Keep all non-wheel input in order.
+                pending_input = Some(input);
+                scroll_frames.flush(Instant::now());
+                continue;
+            }
             match input {
                 Event::Key(key) if key.kind != KeyEventKind::Release => {
                     if key.code == event::KeyCode::Char('r')
@@ -309,6 +339,9 @@ fn main() -> Result<()> {
                 {
                     app.mouse(mouse, worker.as_ref());
                     dirty = true;
+                    if wheel {
+                        scroll_frames.scrolled(Instant::now());
+                    }
                 }
                 Event::Resize(_, _) => {
                     dirty = true;
@@ -329,7 +362,7 @@ fn main() -> Result<()> {
                 // Opt out before exiting, even if a tab-close hook is pending.
                 shared.close()?;
             } else {
-                shared.update(&app, resized)?;
+                shared.update(&app, resized, !scroll_frames.pending())?;
             }
         }
     }
