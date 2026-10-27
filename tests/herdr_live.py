@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Verify plugin actions against an installed Herdr in an isolated test session."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,8 @@ import shutil
 import subprocess
 import tempfile
 import time
+
+from sidebar_layout_live import private_plugin
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,7 +28,8 @@ def wait_for(description, probe, ready=bool, timeout=10):
     raise AssertionError(f"Timed out waiting for {description}: {observed!r}")
 
 
-def verify(base, herdr):
+def verify(base, herdr, binary):
+    plugin = private_plugin(base, binary)
     env = {key: value for key, value in os.environ.items()
            if not key.startswith("HERDR_") and key != "NO_COLOR"}
     for key, folder in [("XDG_CONFIG_HOME", "c"), ("XDG_STATE_HOME", "s"),
@@ -201,7 +205,7 @@ def verify(base, herdr):
             wait_for("test server startup", server_status,
                      lambda status: "status: running" in status, timeout=5)
 
-            run("plugin", "link", str(ROOT))
+            run("plugin", "link", str(plugin))
             created = data("workspace", "create", "--cwd", str(repo),
                            "--label", "Sidebar test", "--focus")
             source = created["root_pane"]["pane_id"]
@@ -610,6 +614,56 @@ def verify(base, herdr):
             shared_at(graph, toggle_workspace_id, wide_tab, wide_source, ordinary, preferred)
             assert data("pane", "get", other_sidebar["pane_id"])["pane"]["terminal_id"] == \
                 other_sidebar["terminal_id"]
+            # Closing the last *work pane* is not tab.close: without cleanup,
+            # the graph keeps that tab alive and records its fullscreen width.
+            for close_method, close_event in [("pane", "pane.closed"), ("exit", "pane.exited")]:
+                closing_tab, closing_source = create_tab(toggle_workspace_id, "Close work pane", repo)
+                focus_tabs(closing_tab)
+                shared_at(graph, toggle_workspace_id, closing_tab, closing_source,
+                          ordinary | {closing_source}, preferred)
+                wait_for("saved width before closing work pane", lambda: saved_view(graph),
+                         lambda record: record.get("width") == preferred
+                                       and record.get("actual_width") == preferred)
+                previous = {item["log_id"] for item in logs()}
+                if close_method == "pane":
+                    run("pane", "close", closing_source)
+                else:
+                    run("pane", "run", closing_source, "exit")
+                hooks_since(previous, event=close_event)
+                wait_for("orphan graph tab removed without a manual tab switch",
+                         lambda: data("tab", "list", "--workspace", toggle_workspace_id)["tabs"],
+                         lambda tabs: {item["tab_id"] for item in tabs} == {wide_tab, leaf_tab})
+                assert data("workspace", "get", toggle_workspace_id)["workspace"]["active_tab_id"] == leaf_tab
+                graph = wait_for("replacement sidebar beside surviving work panes",
+                                 lambda: [item for item in panes(toggle_workspace_id)
+                                          if item.get("label") == "Git Graph Sidebar"],
+                                 lambda items: len(items) == 1)[0]
+                shared_at(graph, toggle_workspace_id, leaf_tab, leaf_source,
+                          ordinary, preferred, tab_panes=leaf_panes)
+                focus_tabs(wide_tab)
+                shared_at(graph, toggle_workspace_id, wide_tab, wide_source, ordinary, preferred)
+
+            # A tab with another work pane must survive; the final work pane
+            # of the final tab must instead remove only its own workspace.
+            focus_tabs(leaf_tab)
+            peer = next(item for item in leaf_panes if item != leaf_source)
+            previous = {item["log_id"] for item in logs()}
+            run("pane", "close", peer)
+            hooks_since(previous, event="pane.closed")
+            shared_at(graph, toggle_workspace_id, leaf_tab, leaf_source,
+                      {wide_source, leaf_source}, preferred)
+            previous = {item["log_id"] for item in logs()}
+            run("tab", "close", wide_tab)
+            hooks_since(previous, event="tab.closed")
+            previous = {item["log_id"] for item in logs()}
+            run("pane", "close", leaf_source)
+            hooks_since(previous, event="pane.closed")
+            wait_for("last work-pane close removes its workspace",
+                     lambda: data("workspace", "list")["workspaces"],
+                     lambda items: all(item["workspace_id"] != toggle_workspace_id for item in items))
+            assert data("pane", "get", other_sidebar["pane_id"])["pane"]["terminal_id"] == \
+                other_sidebar["terminal_id"]
+
             print("PASS: isolated Herdr shared sidebar; toggle open/close/reopen and hook opt-out; "
                   "last toggle width persists across narrow-leaf and single-pane reopen; "
                   "repeated/non-Git actions; tab moves/back/rapid focus; "
@@ -617,7 +671,8 @@ def verify(base, herdr):
                   "independent workspace; q/manual close opt-out; full-view action; "
                   "zoom failure/recovery; containing-tab close restores view/search/width to non-Git tab; "
                   "narrow-leaf moves/recovery retain preferred width and full-height root-right placement; "
-                  "q/manual opt-out followed by tab close; last-tab close; OSC theme")
+                  "q/manual opt-out followed by tab close; last-tab close; "
+                  "last work-pane close/exit removes orphan tab and preserves width; OSC theme")
         finally:
             # All commands use the test session and isolated XDG paths.
             run("server", "stop", check=False)
@@ -629,8 +684,14 @@ def verify(base, herdr):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("binary", nargs="?", type=Path, default=ROOT / "bin/herdr-git-graph")
+    args = parser.parse_args()
+    binary = args.binary.resolve()
+    if not binary.is_file() or not os.access(binary, os.X_OK):
+        parser.error(f"Executable not found: {binary}; build it separately")
     herdr = shutil.which("herdr")
     if not herdr:
         raise SystemExit("Install Herdr before running this optional integration test.")
     with tempfile.TemporaryDirectory(prefix="hgg-live-", dir="/tmp") as temporary:
-        verify(Path(temporary), herdr)
+        verify(Path(temporary), herdr, binary)

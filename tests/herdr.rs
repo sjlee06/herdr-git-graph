@@ -1117,6 +1117,63 @@ fn sync_follows_the_latest_active_tab_and_preserves_user_resized_width() {
 }
 
 #[test]
+fn orphan_sidebar_follows_focus_without_remembering_fullscreen_width() {
+    for event in ["tab.focused", "pane.closed", "pane.exited"] {
+        let fixture = Fixture::new();
+        let first = fixture.run("--open-sidebar");
+        let id = pane(&first)["pane_id"].as_str().unwrap();
+        fixture.update_session(|session| {
+            session["panes"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|pane| pane["pane_id"] != "w-test:p-source");
+            session["workspaces"]["w-test"]["active_tab_id"] = json!("w-test:tab-b");
+        });
+        successful(
+            fixture
+                .command("--sync-sidebar")
+                .env("HERDR_PLUGIN_EVENT", event)
+                .env(
+                    "HERDR_PLUGIN_EVENT_JSON",
+                    r#"{"data":{"workspace_id":"w-test","pane_id":"w-test:p-source"}}"#,
+                )
+                .output()
+                .unwrap(),
+        );
+        assert_eq!(fixture.sidebar(id)["tab_id"], "w-test:tab-b");
+        assert!(
+            (fixture.sidebar(id)["ratio"].as_f64().unwrap() - 0.9).abs() < 0.0001,
+            "{event}: keep 40 columns, not the orphan tab's full 200-column width"
+        );
+    }
+}
+
+#[test]
+fn toggling_an_orphan_sidebar_keeps_its_last_split_width() {
+    let fixture = Fixture::new();
+    fixture.run("--open-sidebar");
+    fixture.update_session(|session| {
+        session["panes"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|pane| pane["pane_id"] != "w-test:p-source");
+    });
+    fixture.run("--toggle-sidebar");
+    fixture.update_session(|session| {
+        session["workspaces"]["w-test"]["active_tab_id"] = json!("w-test:tab-b");
+    });
+    let reopened = successful(
+        fixture
+            .command("--open-sidebar")
+            .env("HERDR_PANE_ID", "w-test:p-other")
+            .output()
+            .unwrap(),
+    );
+    let id = pane(&reopened)["pane_id"].as_str().unwrap();
+    assert!((fixture.sidebar(id)["ratio"].as_f64().unwrap() - 0.9).abs() < 0.0001);
+}
+
+#[test]
 fn sync_does_not_move_a_sidebar_in_an_unfocused_workspace() {
     let fixture = Fixture::new();
     let first = fixture.run("--open-sidebar");

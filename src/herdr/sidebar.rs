@@ -183,9 +183,7 @@ impl SidebarSession {
             record["view"] = snapshot.clone();
             if geometry_due {
                 let bin = env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
-                if let Ok(actual) = pane_width(&bin, &self.pane) {
-                    remember_width(&mut record, actual);
-                }
+                let _ = remember_sidebar_width(&mut record, &bin, &self.pane);
             }
             if record != previous {
                 state.write(&record)?;
@@ -303,7 +301,7 @@ fn sidebar_action(explicit: Option<&Path>, theme: ThemeMode, toggle: bool) -> Re
         if let Some(pane) = saved_pane(&panes, &record) {
             if toggle {
                 let mut record = record.clone();
-                remember_width(&mut record, pane_width(&bin, string(&pane, "pane_id")?)?);
+                remember_sidebar_width(&mut record, &bin, string(&pane, "pane_id")?)?;
                 let closed = request(&bin, &["pane", "close", string(&pane, "pane_id")?])?;
                 state.save_width(preferred_width(&record))?;
                 // Keep the lock through close and opt-out so tab/pane hooks
@@ -358,13 +356,12 @@ pub fn sync_sidebar() -> Result<()> {
     if matches!(
         env::var("HERDR_PLUGIN_EVENT").as_deref(),
         Ok("pane.closed" | "pane.exited")
-    ) {
-        // Herdr emits these for a directly closed/exited pane, not for each
-        // child of a deleted tab. Delayed events must not disable a replacement.
-        if event["data"]["pane_id"] == record["pane_id"] {
-            state.clear()?;
-        }
-        return Ok(());
+    ) && event["data"]["pane_id"] == record["pane_id"]
+    {
+        // Direct sidebar close opts out. Other pane exits must still clean up
+        // a tab whose last work pane disappeared; stale events cannot opt out
+        // a replacement with a different pane ID.
+        return state.clear();
     }
     let bin = env::var_os("HERDR_BIN_PATH").unwrap_or_else(|| "herdr".into());
     let response = request(&bin, &["workspace", "list"])?;
@@ -389,6 +386,17 @@ pub fn sync_sidebar() -> Result<()> {
         .find(|pane| pane["tab_id"] == tab && pane["focused"] == true)
         .or_else(|| panes.iter().find(|pane| pane["tab_id"] == tab));
     if let Some(pane) = saved_pane(&panes, &record) {
+        if pane["tab_id"] == tab
+            && !panes.iter().any(|other| {
+                other["tab_id"] == pane["tab_id"] && other["pane_id"] != pane["pane_id"]
+            })
+        {
+            // The shared sidebar must not keep an otherwise empty tab alive.
+            // Use the existing tab.closed recovery path (including last-tab
+            // workspace removal), retaining the saved view and split width.
+            request(&bin, &["tab", "close", tab])?;
+            return Ok(());
+        }
         if pane["tab_id"] == tab {
             return Ok(());
         }
@@ -436,6 +444,10 @@ pub fn sync_sidebar() -> Result<()> {
 
 fn pane_width(bin: &OsStr, pane: &str) -> Result<u16> {
     let layout = request(bin, &["pane", "layout", "--pane", pane])?;
+    layout_pane_width(&layout, pane)
+}
+
+fn layout_pane_width(layout: &Value, pane: &str) -> Result<u16> {
     let width = layout
         .pointer("/result/layout/panes")
         .and_then(Value::as_array)
@@ -446,6 +458,20 @@ fn pane_width(bin: &OsStr, pane: &str) -> Result<u16> {
         .filter(|w| *w > 0)
         .context("사이드바를 옮길 패널의 너비를 확인하지 못했습니다.")?;
     Ok(width)
+}
+
+fn remember_sidebar_width(record: &mut Value, bin: &OsStr, pane: &str) -> Result<()> {
+    let layout = request(bin, &["pane", "layout", "--pane", pane])?;
+    // Losing the last work pane temporarily expands the graph to the entire
+    // tab. That is not a user resize and must never replace the split width.
+    if layout
+        .pointer("/result/layout/panes")
+        .and_then(Value::as_array)
+        .is_some_and(|panes| panes.len() > 1)
+    {
+        remember_width(record, layout_pane_width(&layout, pane)?);
+    }
+    Ok(())
 }
 
 fn preferred_width(record: &Value) -> u16 {
@@ -478,7 +504,7 @@ fn relocate_sidebar(
 ) -> Result<Value> {
     let mut record = previous.clone();
     let pane_id = string(pane, "pane_id")?;
-    remember_width(&mut record, pane_width(bin, pane_id)?);
+    remember_sidebar_width(&mut record, bin, pane_id)?;
     let mut layout = Layout::capture(
         bin,
         string(target, "pane_id")?,
