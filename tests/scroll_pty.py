@@ -187,6 +187,10 @@ class GraphPTY:
                 return observed
             if self.process.poll() is not None:
                 self.idle(0.05)
+                # Exit may itself satisfy the probe, or leave final PTY output.
+                observed = probe()
+                if observed:
+                    return observed
                 raise AssertionError(f"Exited waiting for {description}: {self.diagnostic()}")
             self.pump()
         raise AssertionError(f"Timed out waiting for {description}: {self.diagnostic()}")

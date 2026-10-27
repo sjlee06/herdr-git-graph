@@ -15,6 +15,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: python3 tests/install.py
+      - run: python3 tests/live_helpers.py
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked

@@ -265,11 +265,13 @@ class Live:
 
     @staticmethod
     def sidebar_identity(snapshot):
-        # A viewer periodically launches git and Herdr CLI workers in its
-        # foreground process group. Those children are not persistent identity.
+        # The direct plugin command leads the foreground process group.
+        # Workers can briefly inherit its name between fork and exec, so
+        # select the main process by PID rather than counting name matches.
+        main_pid = snapshot["foreground_process_group_id"]
         mains = [pid for pid, name in snapshot["foreground"]
                  if name == "herdr-git-graph"]
-        return {"main_pid": mains[0] if len(mains) == 1 else None,
+        return {"main_pid": main_pid if main_pid in mains else None,
                 "shell_pid": snapshot["shell_pid"],
                 "foreground_process_group_id": snapshot["foreground_process_group_id"]}
 

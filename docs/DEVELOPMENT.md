@@ -76,8 +76,11 @@ herdr plugin install sjlee06/herdr-git-graph
 
 The launcher regression tests use `python3` to simulate Herdr; Python is not required to run the plugin. `tests/scroll_pty.py` runs the viewer on an isolated controlling PTY with 2,400 commits and no Herdr server. It checks bounded curve uploads during wheel bursts, direction changes and boundary clamping, clicks and keys behind pending scroll frames, resize, terminal cleanup, OSC theme replies, and responsiveness while a hook holds the shared-state lock. Pass a binary path to check a release build: `python3 tests/scroll_pty.py target/release/herdr-git-graph`.
 
+`tests/live_helpers.py` checks exit/probe races and sidebar process identity without a binary, PTY, or Herdr server. It also verifies that missing main PIDs and nonzero exits still fail.
+
 ```bash
 python3 tests/install.py
+python3 tests/live_helpers.py
 cargo build --locked
 python3 tests/scroll_pty.py
 cargo fmt --check
