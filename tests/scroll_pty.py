@@ -347,6 +347,20 @@ class ScrollPTYTests(unittest.TestCase):
               f"top={final_view['top']}, offset={final_view['top_offset']}", flush=True)
         self.finish()
 
+    def test_continuous_wheels_paint_before_the_stream_stops(self):
+        graph = self.start()
+        mark = len(graph.output)
+        events = 64
+        for _ in range(events):
+            graph.pending.extend(WHEEL_DOWN)
+            graph.idle(0.008)
+        graph.send(b"")
+        during_input = len(upload_headers(graph.output[mark:]))
+        self.assertGreaterEqual(during_input, 4,
+                                "Continuous wheel input postponed drawing until idle")
+        self.assert_position(events * 3)
+        self.finish()
+
     def test_motion_events_do_not_break_scroll_batches(self):
         graph = self.start()
         mark = len(graph.output)

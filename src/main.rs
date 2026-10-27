@@ -23,6 +23,9 @@ use std::{
 mod input;
 mod terminal;
 
+const SCROLL_INPUT_BUDGET: Duration = Duration::from_millis(2);
+const MAX_SCROLL_INPUTS: usize = 256;
+
 #[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
 enum Renderer {
     Auto,
@@ -205,7 +208,7 @@ fn main() -> Result<()> {
     let mut scroll_frames = input::ScrollFrames::default();
     let mut pending_input = None;
     let mut terminal_size = crossterm::terminal::size()?;
-    while !app.quit && !stop.load(Ordering::Relaxed) {
+    'running: while !app.quit && !stop.load(Ordering::Relaxed) {
         // A resize can precede Crossterm's SIGWINCH registration during startup.
         // Checking the PTY size also captures that change without polling Herdr.
         let size = crossterm::terminal::size()?;
@@ -251,6 +254,36 @@ fn main() -> Result<()> {
             app.request_refresh(worker);
         }
         if dirty && scroll_frames.ready(Instant::now()) {
+            if scroll_frames.pending() && !resized {
+                // Catch up with queued wheels before painting, even if a slow
+                // frame has already used its time budget. Never read past an
+                // actionable key/click, or starve drawing under continuous input.
+                let deadline = Instant::now() + SCROLL_INPUT_BUDGET;
+                for _ in 0..MAX_SCROLL_INPUTS {
+                    if pending_input.is_some() || Instant::now() >= deadline {
+                        break;
+                    }
+                    let queued = match input::read(&mut probe, &mut app.theme, Duration::ZERO) {
+                        Ok(input) => input,
+                        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
+                            break 'running;
+                        }
+                        Err(error) => return Err(error).context("터미널 입력 실패"),
+                    };
+                    match queued {
+                        Some(Event::Mouse(mouse)) if input::is_wheel(&Event::Mouse(mouse)) => {
+                            app.mouse(mouse, worker.as_ref());
+                        }
+                        Some(event) if input::needs_current_view(&event) => {
+                            pending_input = Some(event);
+                            break;
+                        }
+                        Some(_) => {}
+                        None => break,
+                    }
+                }
+            }
+            let frame_started = Instant::now();
             let mut viewport = None;
             terminal.draw(|frame| {
                 viewport = ui::draw(frame, &mut app, surface.is_some());
@@ -270,22 +303,14 @@ fn main() -> Result<()> {
                     dirty = true;
                 }
             }
-            scroll_frames.rendered();
+            scroll_frames.rendered(frame_started);
         }
         let previous_theme = app.theme;
         let timeout = scroll_frames.timeout(Instant::now());
         let input = if let Some(input) = pending_input.take() {
             Ok(Some(input))
-        } else if let Some(probe) = &mut probe {
-            probe.read(timeout, &mut app.theme)
         } else {
-            event::poll(timeout).and_then(|ready| {
-                if ready {
-                    event::read().map(Some)
-                } else {
-                    Ok(None)
-                }
-            })
+            input::read(&mut probe, &mut app.theme, timeout)
         };
         let input = match input {
             Ok(input) => input,
@@ -296,21 +321,8 @@ fn main() -> Result<()> {
         };
         dirty |= previous_theme != app.theme;
         if let Some(input) = input {
-            let wheel = matches!(
-                input,
-                Event::Mouse(event)
-                    if matches!(
-                        event.kind,
-                        event::MouseEventKind::ScrollUp | event::MouseEventKind::ScrollDown
-                    )
-            );
-            let needs_current_view = match input {
-                Event::Key(key) => key.kind != KeyEventKind::Release,
-                Event::Mouse(mouse) => matches!(mouse.kind, event::MouseEventKind::Down(_)),
-                Event::Resize(_, _) => true,
-                _ => false,
-            };
-            if scroll_frames.pending() && needs_current_view {
+            let wheel = input::is_wheel(&input);
+            if scroll_frames.pending() && input::needs_current_view(&input) {
                 // A click must use the hit map for the scrolled viewport, not
                 // the last painted frame. Keep all non-wheel input in order.
                 pending_input = Some(input);
