@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Regression checks for live-test helpers; no binary, PTY or server required."""
+import errno
+import fcntl
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from scroll_pty import GraphPTY
+from scroll_pty import GraphPTY, try_exclusive_lock
 from sidebar_layout_live import Live
 
 
@@ -55,6 +58,56 @@ class PTYWaitTests(unittest.TestCase):
         self.assertIs(self.graph.wait_for("ready", lambda: value), value)
         self.graph.process.poll.assert_not_called()
         self.graph.idle.assert_not_called()
+
+
+class SharedLockTests(unittest.TestCase):
+    def setUp(self):
+        self.graph = GraphPTY.__new__(GraphPTY)
+        self.graph.process = Mock()
+        self.graph.process.poll.return_value = None
+        self.graph.pump = Mock()
+        self.graph.diagnostic = Mock(return_value="simulated active process")
+
+    def test_available_lock_is_acquired_without_blocking(self):
+        file = Mock()
+        with patch("scroll_pty.fcntl.flock") as flock:
+            self.assertIs(try_exclusive_lock(file), True)
+        flock.assert_called_once_with(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_busy_lock_returns_false(self):
+        with patch("scroll_pty.fcntl.flock", side_effect=BlockingIOError(
+                errno.EWOULDBLOCK, "lock held")):
+            self.assertIs(try_exclusive_lock(Mock()), False)
+
+    def test_unexpected_lock_errors_still_fail(self):
+        failure = OSError(errno.EBADF, "invalid lock descriptor")
+        with patch("scroll_pty.fcntl.flock", side_effect=failure):
+            with self.assertRaises(OSError) as caught:
+                try_exclusive_lock(Mock())
+        self.assertIs(caught.exception, failure)
+
+    def test_real_contention_is_retried_after_pumping_output(self):
+        with tempfile.NamedTemporaryFile() as owner, open(owner.name, "r+b") as contender:
+            fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.graph.pump.side_effect = lambda: fcntl.flock(owner, fcntl.LOCK_UN)
+            acquired = self.graph.wait_for(
+                "shared-state lock acquisition", lambda: try_exclusive_lock(contender))
+            self.assertIs(acquired, True)
+            self.graph.pump.assert_called_once_with()
+            # The waiter must retain the lock for the responsiveness assertions.
+            with self.assertRaises(BlockingIOError):
+                fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_permanent_contention_times_out(self):
+        with patch("scroll_pty.fcntl.flock", side_effect=BlockingIOError(
+                errno.EWOULDBLOCK, "lock held")) as flock, patch(
+                "scroll_pty.time.monotonic", side_effect=[0, 0, 0.5, 1.1]):
+            with self.assertRaisesRegex(AssertionError,
+                                        "Timed out waiting for shared-state lock acquisition"):
+                self.graph.wait_for("shared-state lock acquisition",
+                                    lambda: try_exclusive_lock(Mock()), timeout=1)
+        self.assertEqual(flock.call_count, 2)
+        self.assertEqual(self.graph.pump.call_count, 2)
 
 
 class SidebarProcessTests(unittest.TestCase):

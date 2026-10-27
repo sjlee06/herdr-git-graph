@@ -112,6 +112,14 @@ def upload_headers(output):
     return headers
 
 
+def try_exclusive_lock(file):
+    try:
+        fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
 def controlling_terminal():
     # Popen has already dup2'ed the slave onto stdin. setsid alone does not
     # acquire a controlling terminal on either Linux or macOS.
@@ -450,7 +458,7 @@ class ScrollPTYTests(unittest.TestCase):
         # Startup/restore and opt-out/quit are intentionally blocking; ordinary
         # persistence must try_lock instead, without stalling wheel or key UI.
         with self.record_path.with_suffix(".lock").open("r+b") as held:
-            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            graph.wait_for("shared-state lock acquisition", lambda: try_exclusive_lock(held))
             try:
                 mark = len(graph.output)
                 graph.send(WHEEL_DOWN * 64 + b"?")
